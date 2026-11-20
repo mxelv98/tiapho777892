@@ -80,6 +80,12 @@ struct LadNetwork: Identifiable, Codable, Equatable {
     var parallel: [LadElement] = []          // legacy single branch (= branches.first)
     var branches: [[LadElement]] = []        // v4.0: any number of parallel branches
     var output: LadElement = LadElement(kind: .coil)
+
+    // Declared explicitly: with both init(from:) and encode(to:) custom,
+    // the compiler no longer synthesizes CodingKeys for this struct.
+    enum CodingKeys: String, CodingKey {
+        case id, title, comment, series, parallel, branches, output
+    }
 }
 
 extension LadNetwork {
