@@ -1,0 +1,34 @@
+name: Build Samaa IPA
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "Showcase/**"
+      - ".github/workflows/build-samaa.yml"
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate project
+        working-directory: Showcase
+        run: xcodegen generate
+      - name: Build (unsigned)
+        working-directory: Showcase
+        run: |
+          xcodebuild -project Samaa.xcodeproj -scheme Samaa \
+            -configuration Release -sdk iphoneos -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+      - name: Package IPA
+        working-directory: Showcase
+        run: |
+          mkdir Payload
+          cp -R build/Build/Products/Release-iphoneos/Samaa.app Payload/
+          zip -qr Samaa.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Samaa-unsigned-ipa
+          path: Showcase/Samaa.ipa
