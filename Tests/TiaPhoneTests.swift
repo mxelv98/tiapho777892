@@ -372,3 +372,25 @@ final class TiaPhonePlantTests: XCTestCase {
         XCTAssertGreaterThan(sim.num("PremixTemp"), 22)
     }
 }
+
+/// v4.2 — project files: export a project to a .tiaphone.json file and
+/// import it back, so new projects arrive as files, not app rebuilds.
+final class TiaPhoneFileTests: XCTestCase {
+
+    func testProjectImportExportRoundTrip() {
+        let store = ProjectStore()
+        let p = TiaProject.plantProject()
+        guard let url = store.exportURL(p) else {
+            XCTFail("export failed")
+            return
+        }
+        // MixingPlant is seeded by the store, so the import is renamed
+        // instead of overwriting it.
+        let name = store.importProject(from: url)
+        XCTAssertEqual(name, "MixingPlant (imported)")
+        let back = store.loadProject(name: "MixingPlant (imported)")
+        XCTAssertNotNil(back)
+        XCTAssertEqual(back?.devices.first?.tags.count, p.devices[0].tags.count)
+        XCTAssertEqual(back?.hmi?.screens.first?.elements.count, p.hmi?.screens.first?.elements.count)
+    }
+}
