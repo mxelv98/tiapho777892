@@ -9,7 +9,11 @@ import SwiftUI
 // is solid green (#1E9E4A) and a dead wire dashed blue (#3A7BD5).
 // Editing is tap-to-target: tap an element to select it (insertion
 // points (+) appear), then tap a favorite or a task-card instruction to
-// insert there. Double-tap toggles NO<->NC and cycles () -> S -> R.
+// insert there. Kind changes (NO<->NC, () -> S -> R) live on the action
+// strip's Toggle button — deliberately NOT a double-tap: stacking a
+// double-tap recognizer on every cell delayed each tap by the
+// double-tap window and left elements feeling stuck (fixed v3.3 after
+// reverse-engineering the TIA editor's single-click model).
 // Pinch zooms 50–200% with semantic levels; the HUD has a Fit button.
 // Part 2: the rung is drawn on one strict grid — thick rail, a stub of
 // exactly one cell, fixed cells, one centerline, output column aligned.
@@ -29,6 +33,7 @@ struct LadEditorView: View {
     @State private var selParallel: Int? = nil   // parallel index when selected
     @State private var insNet: Int? = nil        // insertion target network
     @State private var insPos: Int = 0           // insertion index in series (0...count)
+    @State private var insParallel = false       // insertion targets the parallel branch
     @State private var tagPickerFor: TagTarget? = nil
 
     struct TagTarget: Identifiable {
@@ -91,7 +96,7 @@ struct LadEditorView: View {
     }
 
     private func fit(_ width: CGFloat) {
-        zoom = min(2.0, max(0.5, (width - 16) / 640))
+        zoom = min(2.0, max(0.5, (width - 16) / contentW))
     }
 
     // MARK: Block interface + favorites
@@ -219,7 +224,9 @@ struct LadEditorView: View {
         .frame(width: contentW * z, alignment: .leading)
         .background(selNet == ni ? Color(red: 0.97, green: 0.98, blue: 1.0) : Color.white)
         .overlay(RoundedRectangle(cornerRadius: 3).stroke(Tia.border.opacity(0.6), lineWidth: 0.7))
-        .onTapGesture { selNet = ni }
+        // No tap gesture here: a network-level recognizer fought the
+        // title TextField and the cells (focus/selection sticking).
+        // Network selection happens on the canvas background and cells.
     }
 
     private func rungCanvas(_ ni: Int, _ net: LadNetwork) -> some View {
@@ -241,6 +248,11 @@ struct LadEditorView: View {
         for el in net.parallel { bcols.append(bc); bc += units(of: el) }
         let branchEnd = bc
         return ZStack(alignment: .topLeading) {
+            // canvas background: taps on empty wire/space select the
+            // network (cells above it take their own taps first)
+            Rectangle().fill(Color.white.opacity(0.001))
+                .frame(width: contentW * z, height: canvasH * z)
+                .onTapGesture { selNet = ni }
             // thick left power rail
             Rectangle()
                 .fill(live ? Tia.onlineTrue : Color(red: 0.16, green: 0.18, blue: 0.20))
@@ -284,12 +296,22 @@ struct LadEditorView: View {
                              inOn: bFlows[ei], outOn: bFlows[ei + 1])
                 }
             }
-            if showDetail && insNet == ni {
+            if showDetail && insNet == ni && !insParallel {
                 ForEach(0...net.series.count, id: \.self) { p in
                     Image(systemName: "plus.circle.fill")
                         .font(.system(size: 15 * z))
                         .foregroundColor(Tia.accent)
                         .position(x: colX(p < cols.count ? cols[p] : seriesEnd) * z, y: y * z)
+                        .allowsHitTesting(false)
+                }
+            }
+            if showDetail && insNet == ni && insParallel && hasPar {
+                ForEach(0...net.parallel.count, id: \.self) { p in
+                    Image(systemName: "plus.circle.fill")
+                        .font(.system(size: 15 * z))
+                        .foregroundColor(Tia.accent)
+                        .position(x: colX(p < bcols.count ? bcols[p] : branchEnd) * z, y: by * z)
+                        .allowsHitTesting(false)
                 }
             }
         }
@@ -359,18 +381,22 @@ struct LadEditorView: View {
         .frame(width: wdt * z, height: rowH * z)
         .offset(x: colPt * z, y: rowTop * z)
         .contentShape(Rectangle())
-        .onTapGesture(count: 2) { toggleKind(ni, isOutput ? -2 : ei, parallel: parallel) }
+        // ONE tap recognizer + ONE long-press (tag picker). The previous
+        // stack (double-tap + tap + long-press on every cell, inside a
+        // scroll view with a pinch gesture) delayed or swallowed taps
+        // and left elements stuck — the TIA editor selects with a
+        // single click, and so does this.
         .onTapGesture {
             selNet = ni
             if isOutput {
                 selParallel = nil; selPos = -2
-                insNet = ni; insPos = block.networks[ni].series.count
+                insNet = ni; insPos = block.networks[ni].series.count; insParallel = false
             } else if parallel {
                 selParallel = ei; selPos = -1
-                insNet = ni; insPos = ei + 1
+                insNet = ni; insPos = ei + 1; insParallel = true
             } else {
                 selParallel = nil; selPos = ei
-                insNet = ni; insPos = ei + 1
+                insNet = ni; insPos = ei + 1; insParallel = false
             }
         }
         .onLongPressGesture {
@@ -456,7 +482,7 @@ struct LadEditorView: View {
             }
             stripButton("Tag", "tag") {
                 if let ni = selNet {
-                    tagPickerFor = TagTarget(net: ni, pos: selPos, parallel: selParallel != nil)
+                    tagPickerFor = TagTarget(net: ni, pos: selParallel ?? selPos, parallel: selParallel != nil)
                 }
             }
             stripButton("Branch", "arrow.branch") { addBranch() }
@@ -517,6 +543,14 @@ struct LadEditorView: View {
             // a coil from the palette replaces the network output, like TIA
             updateBlock { $0.networks[ni].output = el }
             selNet = ni; selPos = -2; selParallel = nil
+            return
+        }
+        if insParallel && insNet == ni {
+            // insertion into the parallel branch, after the tapped element
+            let pos = min(insPos, block.networks[ni].parallel.count)
+            updateBlock { $0.networks[ni].parallel.insert(el, at: pos) }
+            selNet = ni; selParallel = pos; selPos = -1
+            insPos = pos + 1
             return
         }
         let pos = min(insPos, block.networks[ni].series.count)
