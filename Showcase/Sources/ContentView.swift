@@ -266,10 +266,10 @@ struct CitiesView: View {
     @Binding var tab: Int
     @State private var query = ""
 
-    private var shown: [(Int, City)] {
-        let all: [(Int, City)] = Array(City.all.enumerated())
+    private var shown: [IndexedCity] {
+        let all: [IndexedCity] = City.all.enumerated().map { IndexedCity(index: $0.offset, city: $0.element) }
         if query.isEmpty { return all }
-        return all.filter { pair in pair.1.name.localizedCaseInsensitiveContains(query) }
+        return all.filter { $0.city.name.localizedCaseInsensitiveContains(query) }
     }
 
     var body: some View {
@@ -293,10 +293,10 @@ struct CitiesView: View {
 
                 ScrollView(showsIndicators: false) {
                     VStack(spacing: 12) {
-                        ForEach(shown, id: \.element.id) { i, c in
-                            CityRowView(city: c, isSelected: i == selected) {
+                        ForEach(shown) { item in
+                            CityRowView(city: item.city, isSelected: item.index == selected) {
                                 withAnimation(.spring(response: 0.45, dampingFraction: 0.85)) {
-                                    selected = i
+                                    selected = item.index
                                     tab = 0
                                 }
                             }
@@ -380,4 +380,10 @@ struct CityRowView: View {
         }
         .buttonStyle(PressableStyle())
     }
+}
+
+struct IndexedCity: Identifiable {
+    let index: Int
+    let city: City
+    var id: UUID { city.id }
 }
