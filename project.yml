@@ -1,0 +1,24 @@
+name: TiaPhone
+options:
+  bundleIdPrefix: com.mehdi
+  deploymentTarget:
+    iOS: "16.0"
+targets:
+  TiaPhone:
+    type: application
+    platform: iOS
+    sources: [Sources]
+    info:
+      path: Config/Info.plist
+      properties:
+        CFBundleDisplayName: Tia Phone
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight, UIInterfaceOrientationPortrait]
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.mehdi.tiaphone
+        SWIFT_VERSION: "5.0"
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
