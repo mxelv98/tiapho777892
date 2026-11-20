@@ -326,3 +326,49 @@ final class TiaPhoneV4Tests: XCTestCase {
         XCTAssertEqual(sim.values["Out"], true)
     }
 }
+
+/// v4.1 — MixingPlant: the three-vessel process project. Filling counts
+/// the litres, transfer pumps move the volume between vessels, and the
+/// heater interlock refuses to heat a nearly empty vessel.
+final class TiaPhonePlantTests: XCTestCase {
+
+    private func makeSim() -> Simulator {
+        let sim = Simulator()
+        sim.attach(TiaProject.plantProject().devices[0])
+        return sim
+    }
+
+    func testPlantFillCountsTheWater() {
+        let sim = makeSim()
+        sim.setInput("FillValve", true)
+        for _ in 0..<100 { sim.scanOnce() }
+        let level = sim.num("PremixLevel")
+        XCTAssertGreaterThan(level, 30)
+        XCTAssertEqual(sim.num("PremixTotal"), level, accuracy: 0.001)
+    }
+
+    func testPlantTransferMovesWaterToPreparation() {
+        let sim = makeSim()
+        sim.setInput("FillValve", true)
+        for _ in 0..<100 { sim.scanOnce() }
+        sim.setInput("FillValve", false)
+        sim.setInput("Pump1Cmd", true)
+        for _ in 0..<50 { sim.scanOnce() }
+        XCTAssertEqual(sim.num("PremixLevel"), 20, accuracy: 0.6)
+        XCTAssertEqual(sim.num("PrepLevel"), 15, accuracy: 0.6)
+    }
+
+    func testPlantHeaterInterlockNeedsLevel() {
+        let sim = makeSim()
+        sim.setInput("Heat1Cmd", true)
+        for _ in 0..<50 { sim.scanOnce() }
+        XCTAssertEqual(sim.values["Heater1"], false)
+        XCTAssertEqual(sim.num("PremixTemp"), 20, accuracy: 0.001)
+        sim.setInput("FillValve", true)
+        for _ in 0..<40 { sim.scanOnce() }
+        sim.setInput("FillValve", false)
+        XCTAssertEqual(sim.values["Heater1"], true)
+        for _ in 0..<100 { sim.scanOnce() }
+        XCTAssertGreaterThan(sim.num("PremixTemp"), 22)
+    }
+}
