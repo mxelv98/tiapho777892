@@ -49,6 +49,27 @@ final class ProjectStore: ObservableObject {
         persistRecents()
     }
 
+    func updateHmi(_ h: HmiDevice) {
+        guard var p = project else { return }
+        p.hmi = h
+        project = p
+        save(p)
+    }
+
+    func updateWatch(_ w: [String]) {
+        guard var p = project else { return }
+        p.watchTags = w
+        project = p
+        save(p)
+    }
+
+    func updateDevice(_ d: PlcDevice) {
+        guard var p = project, let i = p.devices.firstIndex(where: { $0.id == d.id }) else { return }
+        p.devices[i] = d
+        project = p
+        save(p)
+    }
+
     func delete(name: String) {
         try? FileManager.default.removeItem(at: fileURL(name))
         recents.removeAll { $0 == name }

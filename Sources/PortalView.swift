@@ -11,11 +11,7 @@ struct PortalView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                VStack(alignment: .leading, spacing: 0) {
-                    Text("Totally Integrated").font(.system(size: 20, weight: .light))
-                    Text("Automation Portal").font(.system(size: 20, weight: .semibold))
-                    Text("TIA Portal V16 — training edition (Tia Phone)").font(.system(size: 11)).foregroundColor(.secondary)
-                }
+                Wordmark(large: true)
                 Spacer()
                 Text("Portal view").font(.system(size: 12)).foregroundColor(.secondary)
             }

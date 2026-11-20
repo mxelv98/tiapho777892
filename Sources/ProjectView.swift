@@ -3,214 +3,258 @@ import SwiftUI
 enum EditorTab: Equatable {
     case deviceConfig
     case tagTable
-    case block(String)   // block name
+    case block(Int)
+    case hmi
+    case watch
+    case dataTypes
+    case online
 }
 
-enum TreeNode: Equatable {
-    case deviceConfig, tagTable, block(String), root
-}
-
-/// The Project view — TIA Portal's four regions on one screen:
-/// project tree (left), tabbed editors (center), task cards (right),
-/// inspector window (bottom), menu + toolbar on top, status bar below.
+/// The Project view: menu bar, toolbar, project tree, tabbed editors,
+/// task cards (Catalog / Instructions), inspector, status bar.
+/// On a phone: landscape shows the full shell; portrait keeps the editor
+/// full-width and slides the tree / task cards over it — like the real
+/// Portal squeezed onto the phone, never crushed.
 struct ProjectView: View {
     @EnvironmentObject var store: ProjectStore
-    @State private var tab: EditorTab = .deviceConfig
-    @State private var node: TreeNode = .deviceConfig
-    @State private var diagnostics: [Diagnostic] = []
-    @State private var compileSummary: String? = nil
-    @State private var inspectorTab = "Properties"
-    @State private var online = false
-    @State private var showSim = false
-    @State private var selectedNetwork = 0
-    @State private var showTree = false
-    @State private var showCards = false
     @StateObject private var sim = Simulator()
-
-    private var project: TiaProject { store.project! }
-    private var device: PlcDevice { project.devices[0] }
+    @State private var tab: EditorTab = .block(0)
+    @State private var inspectorTab = 0
+    @State private var diagnostics: [Diagnostic] = []
+    @State private var compiled = false
+    @State private var showTree = false
+    @State private var showTasks = false
+    @State private var cardTab = 0
+    @State private var catalogQuery = ""
 
     var body: some View {
         GeometryReader { geo in
-            let portrait = geo.size.width < geo.size.height
-            ZStack {
-                VStack(spacing: 0) {
-                    menuBar
-                    toolbar
+            let landscape = geo.size.width > geo.size.height
+            VStack(spacing: 0) {
+                menuBar(landscape: landscape)
+                toolbar
+                breadcrumb(landscape: landscape)
+                if landscape {
                     HStack(spacing: 0) {
-                        if !portrait { treePane.frame(width: 218) }
-                        VStack(spacing: 0) {
-                            breadcrumb(portrait: portrait)
-                            tabBar
-                            editorArea
-                        }
-                        .frame(maxWidth: .infinity)
-                        if !portrait { taskCards.frame(width: 224) }
+                        tree.frame(width: 218)
+                        editor
+                        tasks.frame(width: 218)
                     }
-                    .frame(maxHeight: .infinity)
-                    inspector
-                    statusBar
+                } else {
+                    editor
                 }
-                if portrait && showTree {
+                inspector.frame(height: 118)
+                statusBar
+            }
+            .background(Tia.pane)
+            .overlay(alignment: .leading) {
+                if !landscape && showTree {
                     HStack(spacing: 0) {
-                        treePane.frame(width: 252)
-                        Color.black.opacity(0.25)
-                            .contentShape(Rectangle())
-                            .onTapGesture { showTree = false }
+                        tree.frame(width: 250)
+                            .background(Tia.pane)
+                            .shadow(color: .black.opacity(0.3), radius: 6, x: 3)
+                        Color.black.opacity(0.25).onTapGesture { showTree = false }
                     }
-                    .zIndex(5)
+                    .transition(.move(edge: .leading))
                 }
-                if portrait && showCards {
+            }
+            .overlay(alignment: .trailing) {
+                if !landscape && showTasks {
                     HStack(spacing: 0) {
-                        Color.black.opacity(0.25)
-                            .contentShape(Rectangle())
-                            .onTapGesture { showCards = false }
-                        taskCards.frame(width: 252)
+                        Color.black.opacity(0.25).onTapGesture { showTasks = false }
+                        tasks.frame(width: 250)
+                            .background(Tia.pane)
+                            .shadow(color: .black.opacity(0.3), radius: 6, x: -3)
                     }
-                    .zIndex(5)
+                    .transition(.move(edge: .trailing))
                 }
             }
         }
-        .background(Tia.pane)
-        .sheet(isPresented: $showSim) {
-            SimPanelView(device: device).environmentObject(sim)
-        }
-        .onAppear { sim.attach(device) }
-    }
-
-    /// The editor breadcrumb bar, exactly like TIA's (orange in online mode).
-    private func breadcrumb(portrait: Bool) -> some View {
-        HStack(spacing: 6) {
-            if portrait {
-                Button { showTree = true } label: {
-                    Label("Tree", systemImage: "sidebar.left").font(.system(size: 10.5, weight: .semibold))
-                }
-                .buttonStyle(.plain).foregroundColor(Tia.textDark)
-            }
-            Text(breadcrumbText)
-                .font(.system(size: 10.5, weight: .semibold))
-                .foregroundColor(Tia.textDark)
-                .lineLimit(1)
-            Spacer()
-            if portrait {
-                Button { showCards = true } label: {
-                    Label("Tasks", systemImage: "sidebar.right").font(.system(size: 10.5, weight: .semibold))
-                }
-                .buttonStyle(.plain).foregroundColor(Tia.textDark)
-            }
-        }
-        .padding(.horizontal, 8).padding(.vertical, 4)
-        .background(sim.powered ? Tia.online : Tia.paneHeader)
-        .overlay(Rectangle().frame(height: 0.7).foregroundColor(Tia.border), alignment: .bottom)
-    }
-
-    private var breadcrumbText: String {
-        let base = "\(project.name)  ▸  \(device.name) [\(device.cpuName)]"
-        switch tab {
-        case .deviceConfig: return base + "  ▸  Device configuration"
-        case .tagTable: return base + "  ▸  PLC tags  ▸  Default tag table"
-        case .block(let n): return base + "  ▸  Program blocks  ▸  \(n) [OB1]"
+        .animation(.easeInOut(duration: 0.18), value: showTree)
+        .animation(.easeInOut(duration: 0.18), value: showTasks)
+        .onAppear { if let d = store.project?.devices.first { sim.attach(d) } }
+        .onChange(of: store.project?.devices.first?.blocks.first?.networks.count) { _ in
+            if let d = store.project?.devices.first { sim.attach(d) }
         }
     }
 
-    // MARK: menu + toolbar
+    private var project: TiaProject { store.project! }
+    private var device: PlcDevice { project.devices[0] }
+    private var deviceBinding: Binding<PlcDevice> {
+        Binding(get: { store.project?.devices[0] ?? PlcDevice() },
+                set: { store.updateDevice($0) })
+    }
 
-    private var menuBar: some View {
-        HStack(spacing: 4) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 13) {
-                    ForEach(["Project", "Edit", "View", "Insert", "Online", "Options", "Tools", "Window", "Help"], id: \.self) {
-                        Text($0).font(.system(size: 11.5)).foregroundColor(Tia.textDark)
-                    }
+    // MARK: menu bar / toolbar / breadcrumb / status bar
+
+    private func menuBar(landscape: Bool) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 14) {
+                Wordmark(large: false)
+                Divider().frame(height: 14)
+                ForEach(["Project", "Edit", "View", "Insert", "Online", "Options", "Tools", "Window", "Help"], id: \.self) { m in
+                    Text(m).font(.system(size: 12)).foregroundColor(Tia.textDark).lineLimit(1)
                 }
-                .padding(.horizontal, 4)
+                Text("— \(project.name) - TIA PHONE").font(.system(size: 12)).foregroundColor(.secondary).lineLimit(1)
+                Spacer(minLength: 0)
             }
-            Text(project.name)
-                .font(.system(size: 11, weight: .semibold)).foregroundColor(Tia.textDark)
-                .lineLimit(1).frame(maxWidth: 120)
-            Button("Close project") { store.close() }
-                .font(.system(size: 11)).foregroundColor(Tia.textDark)
-            Text("Totally Integrated Automation PORTAL")
-                .font(.system(size: 8.5)).foregroundColor(.secondary).lineLimit(1)
+            .padding(.horizontal, 8).padding(.vertical, 4)
         }
-        .padding(.horizontal, 6).padding(.vertical, 4)
-        .background(Tia.titleBar)
+        .background(Color(white: 0.97))
         .overlay(Rectangle().frame(height: 0.7).foregroundColor(Tia.border), alignment: .bottom)
     }
 
     private var toolbar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-        HStack(spacing: 2) {
-            ToolbarGlyph(system: "doc.badge.plus", label: "New") { store.close() }
-            ToolbarGlyph(system: "folder", label: "Open") { store.close() }
-            ToolbarGlyph(system: "square.and.arrow.down", label: "Save") { store.save(project) }
-            Divider().frame(height: 26)
-            ToolbarGlyph(system: "checkmark.square", label: "Compile") { compile() }
-            ToolbarGlyph(system: "arrow.down.to.line", label: "Download") { download() }
-            Divider().frame(height: 26)
-            ToolbarGlyph(system: online ? "wifi" : "wifi.slash", label: online ? "Offline" : "Online", active: online) { online.toggle() }
-            ToolbarGlyph(system: "play.rectangle", label: "Simulation") { showSim = true }
-            if let url = store.exportURL(project) {
-                ShareLink(item: url) {
-                    VStack(spacing: 1) {
-                        Image(systemName: "square.and.arrow.up").font(.system(size: 15))
-                        Text("Export").font(.system(size: 8.5)).lineLimit(1)
+            HStack(spacing: 4) {
+                tbtn("doc.badge.plus", "New") { }
+                tbtn("folder", "Open") { store.close() }
+                tbtn("square.and.arrow.down", "Save") { store.save(project) }
+                Divider().frame(height: 18)
+                tbtn("checkmark.shield", "Compile") { compile() }
+                tbtn("arrow.down.circle", "Download") { compile() }
+                Divider().frame(height: 18)
+                tbtn("play.circle", "Start simulation") { if !sim.powered { sim.power(true) }; sim.run(true) }
+                tbtn("stop.circle", "Stop simulation") { sim.run(false) }
+                Divider().frame(height: 18)
+                if let url = store.exportURL(project) {
+                    ShareLink(item: url) {
+                        Image(systemName: "square.and.arrow.up").foregroundColor(Tia.textDark)
                     }
-                    .frame(width: 52, height: 34)
+                    .frame(width: 30, height: 26)
                 }
-                .buttonStyle(.plain).foregroundColor(.primary)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 6).padding(.vertical, 3)
+        }
+        .background(Tia.toolbar)
+        .overlay(Rectangle().frame(height: 0.7).foregroundColor(Tia.border), alignment: .bottom)
+    }
+
+    private func tbtn(_ icon: String, _ label: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 0) {
+                Image(systemName: icon).font(.system(size: 14)).foregroundColor(Tia.textDark)
+                Text(label).font(.system(size: 8)).foregroundColor(Tia.textDark).lineLimit(1)
+            }
+            .frame(width: 52, height: 30)
+            .background(RoundedRectangle(cornerRadius: 3).fill(Color.white.opacity(0.001)))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func breadcrumb(landscape: Bool) -> some View {
+        HStack(spacing: 6) {
+            if !landscape {
+                Button { showTree = true } label: {
+                    Label("Tree", systemImage: "sidebar.left").font(.system(size: 11))
+                }
+            }
+            Image(systemName: "folder").font(.system(size: 10))
+            Text(project.name).font(.system(size: 11, weight: .semibold))
+            Image(systemName: "chevron.right").font(.system(size: 8))
+            Text(device.name).font(.system(size: 11))
+            Image(systemName: "chevron.right").font(.system(size: 8))
+            Text(tabTitle).font(.system(size: 11))
+            Spacer()
+            if sim.powered {
+                Label("ONLINE", systemImage: "wifi").font(.system(size: 10, weight: .bold)).foregroundColor(.white)
+                    .padding(.horizontal, 6).padding(.vertical, 1)
+                    .background(Capsule().fill(Color.orange))
+            }
+            if !landscape {
+                Button { showTasks = true } label: {
+                    Label("Tasks", systemImage: "sidebar.right").font(.system(size: 11))
+                }
+            }
+        }
+        .foregroundColor(sim.powered ? .white : Tia.textDark)
+        .padding(.horizontal, 8).padding(.vertical, 3)
+        .background(sim.powered ? Color.orange : Tia.headerBand)
+        .overlay(Rectangle().frame(height: 0.7).foregroundColor(Tia.border), alignment: .bottom)
+    }
+
+    private var tabTitle: String {
+        switch tab {
+        case .deviceConfig: return "Device configuration"
+        case .tagTable: return "PLC tags"
+        case .block(let i): return device.blocks.indices.contains(i) ? "\(device.blocks[i].name) [\(device.blocks[i].type) \(device.blocks[i].number)]" : "Block"
+        case .hmi: return "\(project.hmi?.name ?? "HMI") · Screens"
+        case .watch: return "Watch and force tables"
+        case .dataTypes: return "PLC data types"
+        case .online: return "Online & diagnostics"
+        }
+    }
+
+    private var statusBar: some View {
+        HStack(spacing: 10) {
+            Text(compiled ? "Compiled successfully" : "Ready").font(.system(size: 11))
+            if compiled {
+                Text("0 errors").foregroundColor(Color(red: 0.55, green: 0.95, blue: 0.6))
+                Text("0 warnings").foregroundColor(Color(red: 0.55, green: 0.95, blue: 0.6))
             }
             Spacer()
-            if let s = compileSummary {
-                Text(s).font(.system(size: 10.5)).foregroundColor(diagnostics.contains { $0.isError } ? Tia.errorRed : .secondary)
+            HStack(spacing: 4) {
+                Circle().fill(sim.powered ? (sim.running ? Tia.runGreen : .orange) : Color(white: 0.55))
+                    .frame(width: 8, height: 8)
+                Text(sim.powered ? (sim.running ? "RUN" : "STOP") : "Offline").font(.system(size: 11, weight: .semibold))
             }
+            Text(device.cpuName).font(.system(size: 11))
         }
-        }
-        .padding(.horizontal, 6).padding(.vertical, 3)
-        .background(Tia.pane)
-        .overlay(Rectangle().frame(height: 0.7).foregroundColor(Tia.border), alignment: .bottom)
+        .foregroundColor(.white)
+        .padding(.horizontal, 8).padding(.vertical, 3)
+        .background(Tia.statusBar)
     }
 
     // MARK: project tree
 
-    private var treePane: some View {
-        VStack(spacing: 0) {
-            PaneHeader(title: "Project tree")
+    private var tree: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Project tree").font(.system(size: 12, weight: .semibold)).foregroundColor(Tia.textDark)
+                .padding(.horizontal, 8).padding(.vertical, 5)
             ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    treeRow(icon: "folder.fill", text: project.name, level: 0, sel: node == .root) { node = .root }
-                    treeRow(icon: "cpu", text: "\(device.name) [\(device.cpuName)]", level: 1, sel: false) {}
-                    treeRow(icon: "slider.horizontal.3", text: "Device configuration", level: 2, sel: node == .deviceConfig) {
-                        node = .deviceConfig; tab = .deviceConfig; showTree = false
-                    }
-                    treeRow(icon: "curlybraces", text: "Program blocks", level: 2, sel: false) {}
-                    ForEach(device.blocks) { b in
-                        treeRow(icon: "square.stack.3d.up", text: "\(b.name) [\(b.type)\(b.number)]", level: 3, sel: node == .block(b.name)) {
-                            node = .block(b.name); tab = .block(b.name); showTree = false
+                VStack(alignment: .leading, spacing: 1) {
+                    node(icon: "folder.fill", text: project.name, bold: true, depth: 0) { }
+                    node(icon: "cpu", text: "\(device.name) [\(device.cpuName)]", depth: 1) { tab = .deviceConfig }
+                    node(icon: "gearshape", text: "Device configuration", depth: 2, active: tab == .deviceConfig) { tab = .deviceConfig; showTree = false }
+                    node(icon: "curlybraces", text: "Program blocks", depth: 2) { }
+                    ForEach(Array(device.blocks.enumerated()), id: \.element.id) { bi, b in
+                        node(icon: "doc.text", text: "\(b.name) [\(b.type) \(b.number)]", depth: 3, active: tab == .block(bi)) {
+                            tab = .block(bi); showTree = false
                         }
                     }
-                    treeRow(icon: "tag", text: "PLC tags", level: 2, sel: false) {}
-                    treeRow(icon: "tablecells", text: "Default tag table [\(device.tags.count)]", level: 3, sel: node == .tagTable) {
-                        node = .tagTable; tab = .tagTable; showTree = false
+                    node(icon: "tablecells", text: "PLC tags", depth: 2) { }
+                    node(icon: "tablecells", text: "Default tag table", depth: 3, active: tab == .tagTable) { tab = .tagTable; showTree = false }
+                    node(icon: "character.book.closed", text: "PLC data types", depth: 2, active: tab == .dataTypes) { tab = .dataTypes; showTree = false }
+                    node(icon: "binoculars", text: "Watch and force tables", depth: 2) { }
+                    node(icon: "binoculars", text: "Watch_table_1", depth: 3, active: tab == .watch) { tab = .watch; showTree = false }
+                    if let h = project.hmi {
+                        node(icon: "rectangle.on.rectangle", text: "\(h.name) [\(h.panel)]", depth: 1) { tab = .hmi }
+                        node(icon: "rectangle.on.rectangle", text: "HMI screens", depth: 2) { }
+                        ForEach(h.screens) { s in
+                            node(icon: "rectangle", text: s.name, depth: 3, active: tab == .hmi) { tab = .hmi; showTree = false }
+                        }
                     }
-                    treeRow(icon: "eye", text: "Watch and force tables", level: 2, sel: false) {}
-                    treeRow(icon: "antenna.radiowaves.left.and.right", text: "Online access", level: 1, sel: false) {}
+                    node(icon: "wifi", text: "Online & diagnostics", depth: 1, active: tab == .online) { tab = .online; showTree = false }
+                    node(icon: "books.vertical", text: "Documentation", depth: 1) { }
                 }
-                .padding(.vertical, 4)
+                .padding(.horizontal, 4)
             }
         }
         .background(Tia.pane)
+        .overlay(Rectangle().frame(width: 0.7).foregroundColor(Tia.border), alignment: .trailing)
     }
 
-    private func treeRow(icon: String, text: String, level: Int, sel: Bool, action: @escaping () -> Void) -> some View {
+    private func node(icon: String, text: String, bold: Bool = false, depth: Int, active: Bool = false, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 5) {
-                Image(systemName: icon).font(.system(size: 10.5)).foregroundColor(Tia.accent).frame(width: 14)
-                Text(text).font(.system(size: 11.5)).lineLimit(1).foregroundColor(Tia.textDark)
-                Spacer()
+                Image(systemName: icon).font(.system(size: 11)).foregroundColor(Tia.textDark)
+                Text(text).font(.system(size: 12, weight: bold ? .semibold : .regular))
+                    .foregroundColor(Tia.textDark).lineLimit(1)
+                Spacer(minLength: 0)
             }
-            .padding(.leading, CGFloat(6 + level * 13)).padding(.trailing, 4).padding(.vertical, 2.5)
-            .background(sel ? Tia.selection : Color.clear)
+            .padding(.leading, CGFloat(depth) * 13 + 4).padding(.vertical, 3).padding(.trailing, 4)
+            .background(active ? Tia.selection : Color.clear)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -218,246 +262,353 @@ struct ProjectView: View {
 
     // MARK: editors
 
-    private var tabBar: some View {
-        HStack(spacing: 2) {
-            editorTabChip("Device configuration", .deviceConfig)
-            editorTabChip("Default tag table", .tagTable)
-            ForEach(device.blocks) { b in editorTabChip("\(b.name) (\(b.type)\(b.number))", .block(b.name)) }
-            Spacer()
+    @ViewBuilder private var editor: some View {
+        VStack(spacing: 0) {
+            editorTabs
+            Group {
+                switch tab {
+                case .deviceConfig:
+                    DeviceConfigView(device: deviceBinding)
+                case .tagTable:
+                    TagTableView(device: deviceBinding)
+                case .block(let bi):
+                    if device.blocks.indices.contains(bi) {
+                        LadEditorView(block: device.blocks[bi], tags: device.tags, sim: sim) { nb in
+                            var d = device; d.blocks[bi] = nb; store.updateDevice(d)
+                        }
+                    }
+                case .hmi:
+                    if let h = project.hmi {
+                        HmiView(hmi: h, tags: device.tags, counterInstances: counterInstances, sim: sim) { store.updateHmi($0) }
+                    } else {
+                        VStack(spacing: 10) {
+                            Text("No HMI device in this project.").foregroundColor(.secondary)
+                            Button("Add KTP700 Basic PN") { store.updateHmi(HmiDevice()) }
+                        }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.white)
+                    }
+                case .watch:
+                    WatchTableView(tags: device.tags, watch: project.watchTags ?? [], sim: sim) { store.updateWatch($0) }
+                case .dataTypes:
+                    dataTypesPage
+                case .online:
+                    onlinePage
+                }
+            }
+            SimPanelView(device: device).environmentObject(sim)
         }
-        .padding(.horizontal, 4).padding(.top, 3)
-        .background(Tia.pane)
+        .background(Color.white)
     }
 
-    private func editorTabChip(_ title: String, _ t: EditorTab) -> some View {
-        Button { tab = t } label: {
-            Text(title).font(.system(size: 11))
+    private var counterInstances: [String] {
+        var out: [String] = []
+        for b in device.blocks { for n in b.networks {
+            for el in n.series + [n.output] where el.kind == .ctu || el.kind == .ctd {
+                if !el.instance.isEmpty && !out.contains(el.instance) { out.append(el.instance) }
+            }
+        } }
+        return out
+    }
+
+    private var editorTabs: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 2) {
+                etab("Device configuration", active: tab == .deviceConfig) { tab = .deviceConfig }
+                etab("Default tag table", active: tab == .tagTable) { tab = .tagTable }
+                ForEach(Array(device.blocks.enumerated()), id: \.element.id) { bi, b in
+                    etab("\(b.name) [\(b.type) \(b.number)]", active: tab == .block(bi)) { tab = .block(bi) }
+                }
+                if project.hmi != nil { etab("Screen_1", active: tab == .hmi) { tab = .hmi } }
+                etab("Watch_table_1", active: tab == .watch) { tab = .watch }
+            }
+            .padding(.horizontal, 4).padding(.top, 3)
+        }
+        .background(Tia.pane)
+        .overlay(Rectangle().frame(height: 0.7).foregroundColor(Tia.border), alignment: .bottom)
+    }
+
+    private func etab(_ title: String, active: Bool, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title).font(.system(size: 11.5, weight: active ? .semibold : .regular))
+                .foregroundColor(Tia.textDark).lineLimit(1)
                 .padding(.horizontal, 9).padding(.vertical, 4)
-                .background(tab == t ? Color.white : Tia.paneHeader)
+                .background(active ? Color.white : Tia.toolbar)
                 .overlay(RoundedRectangle(cornerRadius: 3).stroke(Tia.border, lineWidth: 0.6))
         }
         .buttonStyle(.plain)
     }
 
-    @ViewBuilder private var editorArea: some View {
-        switch tab {
-        case .deviceConfig:
-            DeviceConfigView(device: deviceBinding)
-        case .tagTable:
-            TagTableView(device: deviceBinding)
-        case .block(let name):
-            if let idx = device.blocks.firstIndex(where: { $0.name == name }) {
-                LadEditorView(device: deviceBinding, blockIndex: idx, selectedNetwork: $selectedNetwork)
-                    .environmentObject(sim)
-            } else {
-                Text("Block not found").padding()
+    // MARK: static pages (data types / online & diagnostics)
+
+    private var dataTypesPage: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("PLC data types").font(.system(size: 13, weight: .semibold)).foregroundColor(Tia.textDark)
+                .padding(10)
+            ForEach([
+                ("TON_TIME", "System type — IEC on-delay timer instance data"),
+                ("TOF_TIME", "System type — IEC off-delay timer instance data"),
+                ("TP_TIME", "System type — IEC pulse timer instance data"),
+                ("CTU_INT", "System type — count-up counter (Int)"),
+                ("CTD_INT", "System type — count-down counter (Int)"),
+                ("CTUD_INT", "System type — count up/down counter (Int)"),
+                ("R_TRIG", "System type — rising-edge detection"),
+                ("F_TRIG", "System type — falling-edge detection")
+            ], id: \.0) { name, desc in
+                HStack(spacing: 8) {
+                    Image(systemName: "character.book.closed").foregroundColor(Tia.textDark)
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(name).font(.system(size: 12, weight: .semibold)).foregroundColor(Tia.textDark)
+                        Text(desc).font(.system(size: 11)).foregroundColor(.secondary)
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 12).padding(.vertical, 6)
+                Rectangle().frame(height: 0.5).foregroundColor(Tia.border)
             }
+            Text("System types are created automatically when you insert a timer or counter instruction.")
+                .font(.system(size: 11)).foregroundColor(.secondary).padding(10)
+            Spacer()
         }
+        .background(Color.white)
     }
 
-    private var deviceBinding: Binding<PlcDevice> {
-        Binding(
-            get: { store.project?.devices.first ?? PlcDevice() },
-            set: { newVal in if store.project != nil { store.project!.devices[0] = newVal } }
-        )
-    }
-
-    // MARK: task cards
-
-    @ViewBuilder private var taskCards: some View {
-        VStack(spacing: 0) {
-            if case .block = tab {
-                PaneHeader(title: "Instructions")
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Basic instructions").font(.system(size: 11, weight: .semibold)).padding(.top, 4)
-                        instructionRow("Normally open contact", .contactNO)
-                        instructionRow("Normally closed contact", .contactNC)
-                        instructionRow("Output coil", .coil)
-                        instructionRow("Set output", .coilSet)
-                        instructionRow("Reset output", .coilReset)
-                        Text("Timer operations").font(.system(size: 11, weight: .semibold)).padding(.top, 8)
-                        instructionRow("TON — on-delay", .ton)
-                        Text("Counter operations").font(.system(size: 11, weight: .semibold)).padding(.top, 8)
-                        instructionRow("CTU — count up", .ctu)
-                        Text("Tap an instruction to add it to the selected network in Main.")
-                            .font(.system(size: 10)).foregroundColor(.secondary).padding(.top, 8)
-                    }
-                    .padding(.horizontal, 8)
+    private var onlinePage: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Online & diagnostics — \(device.name)").font(.system(size: 13, weight: .semibold)).foregroundColor(Tia.textDark)
+                .padding(10)
+            ForEach([
+                ("Device type", device.cpuName),
+                ("Article number", device.article),
+                ("Firmware", device.firmware),
+                ("IP address", "192.168.0.1"),
+                ("Connection", sim.powered ? "Online — simulated (PLCSIM panel below)" : "Offline"),
+                ("Operating mode", sim.powered ? (sim.running ? "RUN" : "STOP") : "—"),
+                ("Diagnostics buffer", "No errors. The most recent event: CPU in RUN (simulated).")
+            ], id: \.0) { k, v in
+                HStack(alignment: .top, spacing: 8) {
+                    Text(k).font(.system(size: 12, weight: .semibold)).foregroundColor(Tia.textDark).frame(width: 130, alignment: .leading)
+                    Text(v).font(.system(size: 12)).foregroundColor(Tia.textDark)
+                    Spacer()
                 }
-            } else {
-                PaneHeader(title: "Catalog")
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 2) {
-                        catalogRow("Controllers", 0, bold: true)
-                        catalogRow("SIMATIC S7-1200", 1, bold: true)
-                        catalogRow("CPU 1214C DC/DC/DC", 2, bold: false)
-                        catalogRow("Signal modules", 0, bold: true)
-                        catalogButton("SM 1221 DI 8 x 24 VDC", article: "6ES7 221-1BF32-0XB0", iAddr: "2", qAddr: "")
-                        catalogButton("SM 1222 DQ 8 x 24 VDC", article: "6ES7 222-1BF32-0XB0", iAddr: "", qAddr: "2")
-                        catalogButton("SM 1231 AI 4 x 13 bit", article: "6ES7 231-4HD32-0XB0", iAddr: "68…75", qAddr: "")
-                        Text("Tap a signal module to add it to the rack.")
-                            .font(.system(size: 10)).foregroundColor(.secondary).padding(.top, 8)
-                    }
-                    .padding(.horizontal, 8).padding(.vertical, 4)
-                }
+                .padding(.horizontal, 12).padding(.vertical, 5)
+                Rectangle().frame(height: 0.5).foregroundColor(Tia.border)
             }
+            Text("Training replica: the connection is simulated by the built-in PLCSIM — no real PLC is contacted.")
+                .font(.system(size: 11)).foregroundColor(.secondary).padding(10)
+            Spacer()
+        }
+        .background(Color.white)
+    }
+
+    // MARK: task cards (Catalog / Instructions)
+
+    private var tasks: some View {
+        VStack(spacing: 0) {
+            Picker("", selection: $cardTab) {
+                Text("Catalog").tag(0)
+                Text("Instructions").tag(1)
+            }
+            .pickerStyle(.segmented)
+            .padding(6)
+            if cardTab == 0 { catalogCard } else { instructionsCard }
         }
         .background(Tia.pane)
         .overlay(Rectangle().frame(width: 0.7).foregroundColor(Tia.border), alignment: .leading)
     }
 
-    private func instructionRow(_ title: String, _ kind: LadElementKind) -> some View {
-        Button { addInstruction(kind) } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "plus.square").foregroundColor(Tia.accent).font(.system(size: 11))
-                Text(title).font(.system(size: 11.5))
-                Spacer()
+    private var catalogCard: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 5) {
+                Image(systemName: "magnifyingglass").foregroundColor(.secondary)
+                TextField("Filter… e.g. 1214 or SM 1223", text: $catalogQuery)
+                    .font(.system(size: 12)).foregroundColor(Tia.textDark)
             }
-            .padding(.vertical, 3).contentShape(Rectangle())
+            .padding(.horizontal, 8).padding(.vertical, 5)
+            .background(Color.white)
+            .overlay(Rectangle().frame(height: 0.7).foregroundColor(Tia.border), alignment: .bottom)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 2) {
+                    if catalogQuery.trimmingCharacters(in: .whitespaces).isEmpty {
+                        ForEach(Catalog.families) { fam in
+                            DisclosureGroup {
+                                ForEach(fam.entries) { e in catalogRow(e) }
+                            } label: {
+                                Text(fam.title).font(.system(size: 12, weight: .semibold)).foregroundColor(Tia.textDark)
+                            }
+                            .padding(.horizontal, 8).padding(.vertical, 2)
+                        }
+                    } else {
+                        ForEach(Catalog.search(catalogQuery), id: \.entry.id) { pair in
+                            catalogRow(pair.entry)
+                        }
+                        if Catalog.search(catalogQuery).isEmpty {
+                            Text("No catalog entries match.").font(.system(size: 12)).foregroundColor(.secondary).padding(8)
+                        }
+                    }
+                    Text("Tap a CPU to replace the device CPU; tap a module to add it to the rack.")
+                        .font(.system(size: 10.5)).foregroundColor(.secondary).padding(8)
+                }
+                .padding(.vertical, 4)
+            }
+        }
+    }
+
+    private func catalogRow(_ e: CatalogEntry) -> some View {
+        Button { applyCatalog(e) } label: {
+            VStack(alignment: .leading, spacing: 0) {
+                Text(e.name).font(.system(size: 12)).foregroundColor(Tia.textDark).lineLimit(1)
+                Text("\(e.article)\(e.version.isEmpty ? "" : " · \(e.version)")").font(.system(size: 10.5)).foregroundColor(.secondary).lineLimit(1)
+            }
+            .padding(.leading, 14).padding(.vertical, 2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
 
-    private func catalogRow(_ title: String, _ level: Int, bold: Bool) -> some View {
-        HStack(spacing: 5) {
-            Image(systemName: "chevron.down").font(.system(size: 8)).foregroundColor(.secondary)
-            Text(title).font(.system(size: 11.5, weight: bold ? .semibold : .regular))
-            Spacer()
-        }
-        .padding(.leading, CGFloat(level * 12)).padding(.vertical, 2.5)
-    }
-
-    private func catalogButton(_ title: String, article: String, iAddr: String, qAddr: String) -> some View {
-        Button {
-            var d = device
-            let slot = (d.modules.map { $0.slot }.max() ?? 1) + 1
-            d.modules.append(PlcModule(name: title, slot: slot, iAddress: iAddr, qAddress: qAddr, article: article))
-            store.project!.devices[0] = d
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "plus.square").foregroundColor(Tia.accent).font(.system(size: 11))
-                Text(title).font(.system(size: 11.5))
-                Spacer()
-            }
-            .padding(.vertical, 3).contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func addInstruction(_ kind: LadElementKind) {
-        guard case .block(let name) = tab,
-              let bi = device.blocks.firstIndex(where: { $0.name == name }) else { return }
+    private func applyCatalog(_ e: CatalogEntry) {
         var d = device
-        guard d.blocks[bi].networks.indices.contains(selectedNetwork) else { return }
-        var el = LadElement(kind: kind)
-        switch kind {
-        case .ton: el.instance = "TON_\(selectedNetwork + 1)"; el.preset = "T#3s"; el.presetSeconds = 3
-        case .ctu: el.instance = "CTU_\(selectedNetwork + 1)"; el.preset = "5"; el.presetValue = 5
-        default: break
-        }
-        if kind == .coil || kind == .coilSet || kind == .coilReset {
-            d.blocks[bi].networks[selectedNetwork].output = el
+        if e.family.hasPrefix("CPU") {
+            d.cpuName = e.name
+            d.article = e.article
+            d.firmware = e.version.isEmpty ? d.firmware : e.version
+            if !d.modules.isEmpty {
+                d.modules[0].name = device.name
+                d.modules[0].article = e.article
+                d.modules[0].firmware = e.version
+            }
         } else {
-            d.blocks[bi].networks[selectedNetwork].series.append(el)
+            let slot = (d.modules.map { $0.slot }.max() ?? 1) + 1
+            d.modules.append(PlcModule(name: e.name, slot: slot, iAddress: "", qAddress: "",
+                                       article: e.article, firmware: e.version))
         }
-        store.project!.devices[0] = d
+        store.updateDevice(d)
+        tab = .deviceConfig
+        showTasks = false
     }
 
-    // MARK: inspector + status
+    private var instructionsCard: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(InstructionCatalog.families) { fam in
+                    DisclosureGroup {
+                        ForEach(fam.items) { item in
+                            Button { addInstruction(item) } label: {
+                                HStack(spacing: 6) {
+                                    Text(item.symbol)
+                                        .font(.system(size: 10, weight: .bold))
+                                        .foregroundColor(item.kind == nil ? .secondary : Tia.textDark)
+                                        .frame(width: 38)
+                                        .padding(.vertical, 2)
+                                        .overlay(RoundedRectangle(cornerRadius: 2).stroke(Tia.border, lineWidth: 0.6))
+                                    Text(item.name)
+                                        .font(.system(size: 11.5))
+                                        .foregroundColor(item.kind == nil ? .secondary : Tia.textDark)
+                                        .lineLimit(2)
+                                    Spacer(minLength: 0)
+                                    if item.kind == nil {
+                                        Text("SCL").font(.system(size: 9)).foregroundColor(.secondary)
+                                    }
+                                }
+                                .padding(.leading, 8).padding(.vertical, 2)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(item.kind == nil)
+                        }
+                    } label: {
+                        Text(fam.title).font(.system(size: 12, weight: .semibold)).foregroundColor(Tia.textDark)
+                    }
+                    .padding(.horizontal, 8).padding(.vertical, 2)
+                }
+                Text("Tap an instruction to append it to the last network of Main. Items marked SCL are part of the SCL course in this training build.")
+                    .font(.system(size: 10.5)).foregroundColor(.secondary).padding(8)
+            }
+            .padding(.vertical, 4)
+        }
+    }
+
+    private func addInstruction(_ item: InstructionItem) {
+        guard let el = InstructionCatalog.makeElement(item, tags: device.tags),
+              tabIsBlockOrMain else { return }
+        var d = device
+        guard !d.blocks.isEmpty, !d.blocks[0].networks.isEmpty else { return }
+        let li = d.blocks[0].networks.count - 1
+        if el.kind == .coil || el.kind == .coilSet || el.kind == .coilReset {
+            d.blocks[0].networks[li].output = el
+        } else {
+            d.blocks[0].networks[li].series.append(el)
+        }
+        store.updateDevice(d)
+        tab = .block(0)
+        showTasks = false
+    }
+
+    private var tabIsBlockOrMain: Bool { true }
+
+    // MARK: inspector + compile
 
     private var inspector: some View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
-                ForEach(["Properties", "Info"], id: \.self) { t in
-                    Button { inspectorTab = t } label: {
-                        Text(t).font(.system(size: 11, weight: inspectorTab == t ? .semibold : .regular))
-                            .padding(.horizontal, 10).padding(.vertical, 4)
-                            .background(inspectorTab == t ? Color.white : Tia.paneHeader)
-                    }
-                    .buttonStyle(.plain)
-                }
+                inspTab("Properties", 0)
+                inspTab("Info", 1)
+                inspTab("Diagnostics", 2)
                 Spacer()
-                Text("Inspector window").font(.system(size: 10.5)).foregroundColor(.secondary).padding(.trailing, 8)
             }
-            .background(Tia.paneHeader)
-            if inspectorTab == "Properties" {
-                HStack(alignment: .top, spacing: 16) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("General").font(.system(size: 11, weight: .semibold))
-                        Text("Name: \(device.name)").font(.system(size: 11))
-                        Text("Device type: \(device.cpuName)").font(.system(size: 11))
-                        Text("Article number: \(device.article)").font(.system(size: 11))
-                        Text("Firmware version: \(device.firmware)").font(.system(size: 11))
-                    }
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("System and clock memory").font(.system(size: 11, weight: .semibold))
-                        Text("First scan: %M1.0   Always TRUE: %M1.2").font(.system(size: 11))
-                        Text("Clock memory byte: %MB0 (10 Hz … 0.5 Hz)").font(.system(size: 11))
-                    }
-                    Spacer()
-                }
-                .padding(8)
-                .frame(height: 86, alignment: .top)
-                .background(Color.white)
-            } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 2) {
+            .background(Tia.toolbar)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 3) {
+                    if inspectorTab == 0 {
+                        propRow("Name", tabTitle)
+                        propRow("Device", "\(device.name) — \(device.cpuName)")
+                        propRow("Comment", project.comment.isEmpty ? "—" : project.comment)
+                    } else {
                         if diagnostics.isEmpty {
-                            Text("No messages. Compile the project to see diagnostics here.")
-                                .font(.system(size: 11)).foregroundColor(.secondary)
+                            Text("No messages. Run Compile (checkmark-shield in the toolbar) to check the program.")
+                                .font(.system(size: 11.5)).foregroundColor(Tia.textDark)
                         }
                         ForEach(diagnostics) { d in
                             HStack(alignment: .top, spacing: 6) {
-                                Image(systemName: d.isError ? "xmark.octagon.fill" : "exclamationmark.triangle.fill")
-                                    .foregroundColor(d.isError ? Tia.errorRed : .orange).font(.system(size: 11))
+                                Image(systemName: d.isError ? "xmark.octagon.fill" : "checkmark.circle.fill")
+                                    .foregroundColor(d.isError ? .red : Tia.runGreen).font(.system(size: 11))
                                 VStack(alignment: .leading, spacing: 0) {
-                                    Text(d.text).font(.system(size: 11))
-                                    Text(d.path).font(.system(size: 10)).foregroundColor(.secondary)
+                                    Text(d.path).font(.system(size: 10.5)).foregroundColor(.secondary)
+                                    Text(d.text).font(.system(size: 11.5)).foregroundColor(Tia.textDark)
                                 }
                                 Spacer()
-                                Text(d.time).font(.system(size: 10)).foregroundColor(.secondary)
+                                Text(d.time).font(.system(size: 10.5)).foregroundColor(.secondary)
                             }
                         }
                     }
-                    .padding(8)
                 }
-                .frame(height: 86)
-                .background(Color.white)
+                .padding(.horizontal, 10).padding(.vertical, 5)
             }
+            .background(Color.white)
         }
         .overlay(Rectangle().frame(height: 0.7).foregroundColor(Tia.border), alignment: .top)
     }
 
-    private var statusBar: some View {
-        HStack(spacing: 12) {
-            Text(online ? "Online" : "Offline").font(.system(size: 10.5, weight: .semibold))
-            Text(device.name).font(.system(size: 10.5))
-            Spacer()
-            Text(sim.powered ? (sim.running ? "PLCSIM: RUN" : "PLCSIM: STOP") : "PLCSIM: off").font(.system(size: 10.5))
+    private func inspTab(_ title: String, _ i: Int) -> some View {
+        Button { inspectorTab = i } label: {
+            Text(title).font(.system(size: 11.5, weight: inspectorTab == i ? .semibold : .regular))
+                .foregroundColor(Tia.textDark)
+                .padding(.horizontal, 10).padding(.vertical, 4)
+                .background(inspectorTab == i ? Color.white : Tia.toolbar)
         }
-        .foregroundColor(.white)
-        .padding(.horizontal, 8).padding(.vertical, 3)
-        .background(Tia.statusBar)
+        .buttonStyle(.plain)
     }
 
-    // MARK: actions
+    private func propRow(_ k: String, _ v: String) -> some View {
+        HStack(spacing: 8) {
+            Text(k).font(.system(size: 11.5, weight: .semibold)).foregroundColor(Tia.textDark).frame(width: 70, alignment: .leading)
+            Text(v).font(.system(size: 11.5)).foregroundColor(Tia.textDark).lineLimit(1)
+            Spacer(minLength: 0)
+        }
+    }
 
     private func compile() {
-        diagnostics = TiaCompiler.compile(project: project)
-        let e = diagnostics.filter { $0.isError }.count
-        let w = diagnostics.count - e
-        compileSummary = "Compiling finished (errors: \(e); warnings: \(w))"
-        inspectorTab = "Info"
-    }
-
-    private func download() {
-        compile()
-        if diagnostics.contains(where: { $0.isError }) {
-            compileSummary = "Download failed: the project has errors."
-            return
-        }
-        compileSummary = "Download to PLCSIM finished without errors."
-        showSim = true
+        diagnostics = Compiler.compile(device)
+        compiled = !diagnostics.contains(where: { $0.isError })
+        inspectorTab = 1
     }
 }

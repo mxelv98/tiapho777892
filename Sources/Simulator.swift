@@ -2,7 +2,8 @@ import Foundation
 
 /// PLCSIM-lite: a scan-cycle evaluator for the taught LAD subset.
 /// One scan every 100 ms while RUN is on. Contacts read the current value
-/// table; coils write it. TON/CTU keep runtime state per instance.
+/// table; coils write it. Timers (TON/TOF/TP) and counters (CTU/CTD) keep
+/// runtime state per instance; edge contacts keep the previous scan value.
 /// Teaching simplification (documented): in a network where a CTU feeds a
 /// TON, the counter is reset when the TON hold finishes (Q falls) — the
 /// same batch behaviour as the SortingStation SCL twin.
@@ -13,9 +14,14 @@ final class Simulator: ObservableObject {
     @Published var running = false
 
     private var tonElapsed: [String: Double] = [:]
-    private var tonQ: [String: Bool] = [:]
+    private var timerQ: [String: Bool] = [:]
+    private var timerLastIN: [String: Bool] = [:]
+    private var tpActive: [String: Bool] = [:]
     private var ctuCV: [String: Int] = [:]
     private var ctuLastCU: [String: Bool] = [:]
+    private var counterKind: [String: LadElementKind] = [:]
+    private var counterPV: [String: Int] = [:]
+    private var edgePrev: [String: Bool] = [:]
     private var timer: Timer?
     private var device: PlcDevice?
 
@@ -26,7 +32,8 @@ final class Simulator: ObservableObject {
 
     func reset() {
         values = [:]; counts = [:]
-        tonElapsed = [:]; tonQ = [:]; ctuCV = [:]; ctuLastCU = [:]
+        tonElapsed = [:]; timerQ = [:]; timerLastIN = [:]; tpActive = [:]
+        ctuCV = [:]; ctuLastCU = [:]; counterKind = [:]; counterPV = [:]; edgePrev = [:]
         if let d = device { for t in d.tags { values[t.name] = false } }
     }
 
@@ -49,10 +56,9 @@ final class Simulator: ObservableObject {
 
     func setInput(_ tag: String, _ v: Bool) { values[tag] = v }
 
-    private func contact(_ el: LadElement) -> Bool {
-        let v = values[el.tag] ?? false
-        return el.kind == .contactNC ? !v : v
-    }
+    func counterPV(_ instance: String) -> Int { counterPV[instance] ?? 0 }
+
+    private func isTimer(_ k: LadElementKind) -> Bool { k == .ton || k == .tof || k == .tp }
 
     private func scan() {
         guard let d = device, let main = d.blocks.first(where: { $0.type == "OB" }) else { return }
@@ -60,16 +66,16 @@ final class Simulator: ObservableObject {
         for net in main.networks {
             var power = true
             for el in net.series {
-                // Timers and counters in the rung are driven by the power
-                // flowing into them, then contribute their Q to the rung.
-                if el.kind == .ctu { applyCounter(el, cuPower: power) }
-                if el.kind == .ton { advanceTimer(el, power: power, net: net, dt: dt) }
+                if el.kind == .notOp { power = !power; continue }
+                if el.kind == .ctu || el.kind == .ctd { applyCounter(el, cuPower: power) }
+                if isTimer(el.kind) { advanceTimer(el, power: power, net: net, dt: dt) }
                 power = power && elementValue(el)
             }
             if !net.parallel.isEmpty {
                 var branch = true
                 for el in net.parallel {
-                    if el.kind == .ctu { applyCounter(el, cuPower: branch) }
+                    if el.kind == .notOp { branch = !branch; continue }
+                    if el.kind == .ctu || el.kind == .ctd { applyCounter(el, cuPower: branch) }
                     branch = branch && elementValue(el)
                 }
                 power = power || branch
@@ -81,25 +87,53 @@ final class Simulator: ObservableObject {
 
     private func elementValue(_ el: LadElement) -> Bool {
         switch el.kind {
-        case .contactNO, .contactNC: return contact(el)
-        case .ton: return tonQ[el.instance] ?? false
+        case .contactNO: return values[el.tag] ?? false
+        case .contactNC: return !(values[el.tag] ?? false)
+        case .pTrig:
+            let cur = values[el.tag] ?? false
+            let prev = edgePrev[el.id.uuidString] ?? false
+            edgePrev[el.id.uuidString] = cur
+            return cur && !prev
+        case .nTrig:
+            let cur = values[el.tag] ?? false
+            let prev = edgePrev[el.id.uuidString] ?? false
+            edgePrev[el.id.uuidString] = cur
+            return !cur && prev
+        case .ton, .tof, .tp: return timerQ[el.instance] ?? false
         case .ctu: return (ctuCV[el.instance] ?? 0) >= el.presetValue
+        case .ctd: return (ctuCV[el.instance] ?? el.presetValue) <= 0
         default: return values[el.tag] ?? false
         }
     }
 
     private func advanceTimer(_ el: LadElement, power: Bool, net: LadNetwork, dt: Double) {
-        let wasQ = tonQ[el.instance] ?? false
-        if power {
-            tonElapsed[el.instance] = (tonElapsed[el.instance] ?? 0) + dt
-        } else {
-            tonElapsed[el.instance] = 0
+        let wasQ = timerQ[el.instance] ?? false
+        var q = wasQ
+        switch el.kind {
+        case .ton:
+            if power { tonElapsed[el.instance] = (tonElapsed[el.instance] ?? 0) + dt }
+            else { tonElapsed[el.instance] = 0 }
+            q = power && (tonElapsed[el.instance] ?? 0) >= el.presetSeconds
+        case .tof:
+            if power { tonElapsed[el.instance] = 0; q = true }
+            else {
+                tonElapsed[el.instance] = (tonElapsed[el.instance] ?? 0) + dt
+                q = (tonElapsed[el.instance] ?? 0) < el.presetSeconds
+            }
+        case .tp:
+            let last = timerLastIN[el.instance] ?? false
+            if power && !last { tpActive[el.instance] = true; tonElapsed[el.instance] = 0 }
+            timerLastIN[el.instance] = power
+            if tpActive[el.instance] ?? false {
+                tonElapsed[el.instance] = (tonElapsed[el.instance] ?? 0) + dt
+                q = (tonElapsed[el.instance] ?? 0) < el.presetSeconds
+                if !q { tpActive[el.instance] = false }
+            } else { q = false }
+        default: break
         }
-        let q = power && (tonElapsed[el.instance] ?? 0) >= el.presetSeconds
-        tonQ[el.instance] = q
+        timerQ[el.instance] = q
         if !el.tag.isEmpty { values[el.tag] = q }
-        if wasQ && !q {
-            // hold finished: reset counters feeding this timer in the same network
+        if el.kind == .ton && wasQ && !q {
             for s in net.series where s.kind == .ctu { ctuCV[s.instance] = 0 }
         }
     }
@@ -110,22 +144,33 @@ final class Simulator: ObservableObject {
         case .coilSet: if power { values[el.tag] = true }
         case .coilReset:
             if power {
-                if ctuCV[el.tag] != nil { ctuCV[el.tag] = 0 }
-                else { values[el.tag] = false }
+                if let kind = counterKind[el.tag] {
+                    ctuCV[el.tag] = (kind == .ctd) ? (counterPV[el.tag] ?? 0) : 0
+                } else { values[el.tag] = false }
             }
-        case .ton: advanceTimer(el, power: power, net: net, dt: dt)
-        case .ctu: applyCounter(el, cuPower: power)
+        case .ton, .tof, .tp: advanceTimer(el, power: power, net: net, dt: dt)
+        case .ctu, .ctd: applyCounter(el, cuPower: power)
         default: break
         }
     }
 
-    /// CU comes from the counter's input tag (rising edge) when one is set,
-    /// otherwise from the rung power flowing into the counter.
+    /// CU/CD comes from the counter's input tag (rising edge) when one is
+    /// set, otherwise from the rung power flowing into the counter.
     private func applyCounter(_ el: LadElement, cuPower: Bool) {
+        counterKind[el.instance] = el.kind
+        counterPV[el.instance] = el.presetValue
+        if el.kind == .ctd && ctuCV[el.instance] == nil { ctuCV[el.instance] = el.presetValue }
         let cu = el.inputTag.isEmpty ? cuPower : (values[el.inputTag] ?? false)
         let last = ctuLastCU[el.instance] ?? false
-        if cu && !last { ctuCV[el.instance] = (ctuCV[el.instance] ?? 0) + 1 }
+        if cu && !last {
+            if el.kind == .ctd { ctuCV[el.instance] = (ctuCV[el.instance] ?? el.presetValue) - 1 }
+            else { ctuCV[el.instance] = (ctuCV[el.instance] ?? 0) + 1 }
+        }
         ctuLastCU[el.instance] = cu
-        if !el.tag.isEmpty { values[el.tag] = (ctuCV[el.instance] ?? 0) >= el.presetValue }
+        if !el.tag.isEmpty {
+            values[el.tag] = el.kind == .ctd
+                ? (ctuCV[el.instance] ?? el.presetValue) <= 0
+                : (ctuCV[el.instance] ?? 0) >= el.presetValue
+        }
     }
 }

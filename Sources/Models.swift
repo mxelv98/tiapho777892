@@ -1,6 +1,7 @@
 import Foundation
 
 // MARK: - Data model (mirrors the tia-mcp project-spec shape: project → device → tags / blocks)
+// New fields added in v2 are Optional so v1 project files still open.
 
 enum LadElementKind: String, Codable, CaseIterable {
     case contactNO   // --| |--
@@ -8,27 +9,33 @@ enum LadElementKind: String, Codable, CaseIterable {
     case coil        // --( )--
     case coilSet     // --(S)--
     case coilReset   // --(R)--
-    case ton         // TON box
-    case ctu         // CTU box
+    case ton         // TON box (on-delay)
+    case tof         // TOF box (off-delay)
+    case tp          // TP box (pulse)
+    case ctu         // CTU box (count up)
+    case ctd         // CTD box (count down)
+    case pTrig       // --|P|-- edge contact
+    case nTrig       // --|N|-- edge contact
+    case notOp       // NOT (invert rung power)
 }
 
 struct LadElement: Identifiable, Codable, Equatable {
     var id = UUID()
     var kind: LadElementKind = .contactNO
-    var tag: String = ""          // contact/coil operand; for TON/CTU the Q output tag
-    var instance: String = ""     // TON/CTU instance name, e.g. "TON_1"
-    var preset: String = "T#3s"   // TON PT / CTU PV (as text, like TIA shows)
-    var presetValue: Int = 5      // CTU: PV count
-    var presetSeconds: Double = 3 // TON: PT in seconds
-    var inputTag: String = ""     // CTU count input tag (CU)
+    var tag: String = ""          // contact/coil operand; for timer/counter boxes the Q output tag
+    var instance: String = ""     // timer/counter instance name, e.g. "TON_1"
+    var preset: String = "T#3s"   // PT / PV as text, like TIA shows
+    var presetValue: Int = 5      // counter PV
+    var presetSeconds: Double = 3 // timer PT in seconds
+    var inputTag: String = ""     // counter count-input tag (CU / CD)
 }
 
 struct LadNetwork: Identifiable, Codable, Equatable {
     var id = UUID()
     var title: String = ""
     var comment: String = ""
-    var series: [LadElement] = []     // main rung, left → right
-    var parallel: [LadElement] = []   // one parallel branch of contacts under the first elements
+    var series: [LadElement] = []
+    var parallel: [LadElement] = []
     var output: LadElement = LadElement(kind: .coil)
 }
 
@@ -40,6 +47,14 @@ struct PlcTag: Identifiable, Codable, Equatable {
     var comment: String = ""
 }
 
+struct InterfaceVar: Identifiable, Codable, Equatable {
+    var id = UUID()
+    var name: String = ""
+    var section: String = "Temp"  // Input / Output / InOut / Static / Temp / Constant / Return
+    var dataType: String = "Bool"
+    var comment: String = ""
+}
+
 struct PlcBlock: Identifiable, Codable, Equatable {
     var id = UUID()
     var name: String = "Main"
@@ -47,6 +62,7 @@ struct PlcBlock: Identifiable, Codable, Equatable {
     var type: String = "OB"       // OB / FB / FC
     var language: String = "LAD"
     var networks: [LadNetwork] = []
+    var interfaceRows: [InterfaceVar]? = nil   // v2 (optional: v1 files)
 }
 
 struct PlcModule: Identifiable, Codable, Equatable {
@@ -70,6 +86,39 @@ struct PlcDevice: Identifiable, Codable {
     var blocks: [PlcBlock] = []
 }
 
+// MARK: - HMI (v2)
+
+enum HmiElementKind: String, Codable, CaseIterable {
+    case button, lamp, ioField, textLabel, bar
+}
+
+struct HmiElement: Identifiable, Codable, Equatable {
+    var id = UUID()
+    var kind: HmiElementKind = .button
+    var text: String = ""
+    var tag: String = ""          // PLC tag binding (button/lamp) or counter instance (ioField/bar)
+    var x: Double = 20            // position on the 350x230 screen canvas
+    var y: Double = 20
+    var w: Double = 96
+    var h: Double = 40
+    var colorOn: String = "green" // lamp on-colour name
+}
+
+struct HmiScreen: Identifiable, Codable, Equatable {
+    var id = UUID()
+    var name: String = "Screen_1"
+    var elements: [HmiElement] = []
+}
+
+struct HmiDevice: Identifiable, Codable, Equatable {
+    var id = UUID()
+    var name: String = "HMI_1"
+    var panel: String = "KTP700 Basic PN"
+    var screens: [HmiScreen] = [HmiScreen()]
+}
+
+// MARK: - Project
+
 struct TiaProject: Identifiable, Codable {
     var id = UUID()
     var name: String = "Project1"
@@ -77,6 +126,8 @@ struct TiaProject: Identifiable, Codable {
     var comment: String = ""
     var created: Date = Date()
     var devices: [PlcDevice] = []
+    var hmi: HmiDevice? = nil          // v2 (optional: v1 files)
+    var watchTags: [String]? = nil     // v2 (optional: v1 files)
 
     static func newProject(name: String) -> TiaProject {
         var p = TiaProject(name: name)
@@ -91,13 +142,20 @@ struct TiaProject: Identifiable, Codable {
             PlcModule(name: "CB 1241 (RS485)", slot: 101, iAddress: "", qAddress: "",
                       article: "", firmware: "")
         ]
-        d.blocks = [PlcBlock(name: "Main", number: 1, type: "OB")]
+        var main = PlcBlock(name: "Main", number: 1, type: "OB")
+        main.interfaceRows = [
+            InterfaceVar(name: "Initial_Call", section: "Temp", dataType: "Bool", comment: "Initial call of this OB"),
+            InterfaceVar(name: "Remanence", section: "Temp", dataType: "Bool", comment: "Scan cycle start info"),
+            InterfaceVar(name: "Temp_1", section: "Temp", dataType: "Bool", comment: "")
+        ]
+        d.blocks = [main]
         p.devices = [d]
+        p.hmi = HmiDevice()
         return p
     }
 
-    /// The demo project students open first: the sorting-station exercise
-    /// (same station as the Agent Factory / tia-mcp twin).
+    /// The demo project students open first: the sorting station,
+    /// with its HMI screen and watch table ready.
     static func demoProject() -> TiaProject {
         var p = newProject(name: "SortingStation")
         let tags: [(String, String)] = [
@@ -138,6 +196,19 @@ struct TiaProject: Identifiable, Codable {
                        series: [el(.contactNO, "LampRun"), el(.contactNC, "Blade")],
                        output: el(.coil, "StackGreen"))
         ]
+        p.watchTags = ["BtnStart", "SensCount", "BeltA", "Blade", "BatchFull", "StackGreen"]
+        var screen = HmiScreen(name: "Screen_1")
+        screen.elements = [
+            HmiElement(kind: .textLabel, text: "Sorting Station", x: 16, y: 10, w: 200, h: 24),
+            HmiElement(kind: .button, text: "START", tag: "BtnStart", x: 16, y: 52, w: 110, h: 52),
+            HmiElement(kind: .lamp, text: "Running", tag: "LampRun", x: 150, y: 52, w: 84, h: 52),
+            HmiElement(kind: .lamp, text: "Blade", tag: "Blade", x: 250, y: 52, w: 84, h: 52, colorOn: "red"),
+            HmiElement(kind: .textLabel, text: "Boxes in batch", x: 16, y: 122, w: 140, h: 20),
+            HmiElement(kind: .ioField, text: "Count", tag: "BatchCounter", x: 16, y: 146, w: 110, h: 40),
+            HmiElement(kind: .bar, text: "Batch", tag: "BatchCounter", x: 150, y: 146, w: 184, h: 40),
+            HmiElement(kind: .lamp, text: "Batch full", tag: "BatchFull", x: 250, y: 122, w: 84, h: 20, colorOn: "orange")
+        ]
+        p.hmi = HmiDevice(screens: [screen])
         return p
     }
 }
@@ -147,7 +218,7 @@ struct TiaProject: Identifiable, Codable {
 struct Diagnostic: Identifiable {
     var id = UUID()
     var isError: Bool
-    var path: String      // e.g. PLC_1 › Program blocks › Main (OB1)
+    var path: String
     var text: String
     var time: String
 }

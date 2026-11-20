@@ -64,8 +64,74 @@ struct DeviceConfigView: View {
             .frame(minWidth: 860)
             }
             .background(Color.white)
+            detailsSection
         }
         .background(Color.white)
+    }
+
+    // Details view under the device view, like the real editor:
+    // Properties / IO tags / System constants / Texts tabs.
+    @State private var detailTab = 0
+
+    private var detailsSection: some View {
+        VStack(spacing: 0) {
+            Divider()
+            HStack(spacing: 0) {
+                ForEach(Array(["Properties", "IO tags", "System constants", "Texts"].enumerated()), id: \.offset) { i, t in
+                    Button { detailTab = i } label: {
+                        Text(t).font(.system(size: 11, weight: detailTab == i ? .semibold : .regular))
+                            .foregroundColor(Tia.textDark)
+                            .padding(.horizontal, 10).padding(.vertical, 4)
+                            .background(detailTab == i ? Color.white : Tia.toolbar)
+                    }
+                    .buttonStyle(.plain)
+                }
+                Spacer()
+            }
+            .background(Tia.toolbar)
+            Group {
+                switch detailTab {
+                case 1:
+                    ScrollView {
+                        VStack(spacing: 0) {
+                            ForEach(device.tags) { t in
+                                HStack(spacing: 0) {
+                                    cell(t.name, 190)
+                                    cell(t.dataType, 92)
+                                    cell(t.address, 118)
+                                    cell(t.comment, 220)
+                                    Spacer()
+                                }
+                                Divider()
+                            }
+                            if device.tags.isEmpty {
+                                Text("No IO tags.").font(.system(size: 11)).foregroundColor(.secondary).padding(8)
+                            }
+                        }
+                    }
+                    .frame(height: 92)
+                case 2:
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Default_DI_DQ — system constant, value 16#7A0").font(.system(size: 11)).foregroundColor(Tia.textDark)
+                        Text("Local — system constant of the CPU's integrated IO").font(.system(size: 11)).foregroundColor(Tia.textDark)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(8)
+                case 3:
+                    Text("No texts defined for this device.").font(.system(size: 11)).foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading).padding(8)
+                default:
+                    if let m = device.modules.first(where: { $0.slot == (selectedSlot ?? 1) }) ?? device.modules.first {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Name: \(m.name)").font(.system(size: 11)).foregroundColor(Tia.textDark)
+                            Text("Article no.: \(m.article.isEmpty ? "—" : m.article)   Firmware: \(m.firmware.isEmpty ? "—" : m.firmware)").font(.system(size: 11)).foregroundColor(Tia.textDark)
+                            Text("I address: \(m.iAddress.isEmpty ? "—" : m.iAddress)   Q address: \(m.qAddress.isEmpty ? "—" : m.qAddress)").font(.system(size: 11)).foregroundColor(Tia.textDark)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading).padding(8)
+                    }
+                }
+            }
+            .background(Color.white)
+        }
     }
 
     private func rackSlot(_ m: PlcModule) -> some View {

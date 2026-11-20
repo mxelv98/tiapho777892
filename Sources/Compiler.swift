@@ -34,16 +34,18 @@ enum TiaCompiler {
                     }
                     for el in elements {
                         switch el.kind {
-                        case .contactNO, .contactNC, .coil, .coilSet:
+                        case .contactNO, .contactNC, .coil, .coilSet, .pTrig, .nTrig:
                             if el.tag.isEmpty { err(netPath, "An instruction has no operand.") }
                             else if !defined.contains(el.tag) { err(netPath, "The tag '\(el.tag)' is not defined in the tag table.") }
+                        case .notOp:
+                            break
                         case .coilReset:
                             if el.tag.isEmpty { err(netPath, "A reset coil has no operand.") }
-                        case .ton:
+                        case .ton, .tof, .tp:
                             if el.instance.isEmpty { err(netPath, "The timer has no instance name.") }
                             if el.tag.isEmpty { err(netPath, "The timer output (Q) has no tag.") }
                             else if !defined.contains(el.tag) { err(netPath, "The tag '\(el.tag)' is not defined in the tag table.") }
-                        case .ctu:
+                        case .ctu, .ctd:
                             if el.instance.isEmpty { err(netPath, "The counter has no instance name.") }
                             if !el.inputTag.isEmpty && !defined.contains(el.inputTag) {
                                 err(netPath, "The counter input tag '\(el.inputTag)' is not defined in the tag table.")
