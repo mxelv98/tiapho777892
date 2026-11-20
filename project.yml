@@ -33,3 +33,21 @@ targets:
         MARKETING_VERSION: "2.0"
         CURRENT_PROJECT_VERSION: "2"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+  TiaPhoneTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [Tests]
+    dependencies:
+      - target: TiaPhone
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.mehdi.tiaphone.tests
+        SWIFT_VERSION: "5.0"
+schemes:
+  TiaPhone:
+    build:
+      targets:
+        TiaPhone: all
+    test:
+      targets:
+        - TiaPhoneTests
