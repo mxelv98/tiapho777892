@@ -120,6 +120,17 @@ struct SimPanelView: View {
                     ForEach(device.tags) { t in
                         simRow(t)
                     }
+                    if let dbs = device.dataBlocks, !dbs.isEmpty {
+                        Text("Data blocks").font(.system(size: 11, weight: .bold)).foregroundColor(Tia.textDark)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 6).padding(.vertical, 4)
+                            .background(Tia.paneHeader)
+                        ForEach(dbs) { db in
+                            ForEach(db.rows) { row in
+                                dbRow(db.name, row)
+                            }
+                        }
+                    }
                 }
             }
             Text("Modified values affect the simulation only — no connection to a real PLC.")
@@ -131,9 +142,11 @@ struct SimPanelView: View {
     }
 
     private func simRow(_ t: PlcTag) -> some View {
+        if t.dataType != "Bool" { return AnyView(numRow(t)) }
         let value = sim.values[t.name] ?? false
         let isOutput = t.address.hasPrefix("%Q")
-        return HStack(spacing: 0) {
+        let forced = sim.forcedBools[t.name] != nil
+        return AnyView(HStack(spacing: 0) {
             tableCell(t.name, w: 130)
             tableCell(t.address, w: 64)
             HStack(spacing: 5) {
@@ -151,6 +164,88 @@ struct SimPanelView: View {
                     get: { sim.values[t.name] ?? false },
                     set: { sim.setInput(t.name, $0) }
                 ))
+                .labelsHidden()
+                .frame(width: 110, alignment: .leading)
+            }
+            Button {
+                sim.setForceBool(t.name, forced ? nil : value)
+            } label: {
+                Image(systemName: forced ? "pin.fill" : "pin")
+                    .font(.system(size: 11))
+                    .foregroundColor(forced ? .orange : .secondary)
+                    .frame(width: 26, height: 22)
+            }
+            .buttonStyle(.plain)
+            Spacer()
+        }
+        .padding(.horizontal, 6).padding(.vertical, 3)
+        .overlay(Rectangle().frame(height: 0.5).foregroundColor(Tia.border.opacity(0.45)), alignment: .bottom))
+    }
+
+    private func numRow(_ t: PlcTag) -> some View {
+        let v = sim.num(t.name)
+        let forced = sim.forcedNums[t.name] != nil
+        let step: Double = t.dataType == "Real" ? 0.5 : 1
+        return HStack(spacing: 0) {
+            tableCell(t.name, w: 130)
+            tableCell(t.address, w: 64)
+            Text(fmtNum(v))
+                .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+                .foregroundColor(Tia.textDark)
+                .frame(width: 92, alignment: .leading)
+            Stepper("", value: Binding(
+                get: { sim.num(t.name) },
+                set: { sim.setNumInput(t.name, $0) }
+            ), step: step)
+            .labelsHidden()
+            .frame(width: 110, alignment: .leading)
+            Button {
+                sim.setForceNum(t.name, forced ? nil : v)
+            } label: {
+                Image(systemName: forced ? "pin.fill" : "pin")
+                    .font(.system(size: 11))
+                    .foregroundColor(forced ? .orange : .secondary)
+                    .frame(width: 26, height: 22)
+            }
+            .buttonStyle(.plain)
+            Spacer()
+        }
+        .padding(.horizontal, 6).padding(.vertical, 3)
+        .overlay(Rectangle().frame(height: 0.5).foregroundColor(Tia.border.opacity(0.45)), alignment: .bottom)
+    }
+
+    private func fmtNum(_ v: Double) -> String {
+        v == v.rounded() && abs(v) < 100000 ? String(Int(v)) : String(format: "%.1f", v)
+    }
+
+    private func dbRow(_ dbName: String, _ row: DbRow) -> some View {
+        let key = "\(dbName).\(row.name)"
+        return HStack(spacing: 0) {
+            tableCell(key, w: 130)
+            tableCell(row.dataType, w: 64)
+            if row.dataType == "Bool" {
+                HStack(spacing: 5) {
+                    Circle().fill((sim.values[key] ?? false) ? Tia.onlineTrue : Color.gray.opacity(0.35)).frame(width: 9, height: 9)
+                    Text((sim.values[key] ?? false) ? "TRUE" : "FALSE")
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .foregroundColor(Tia.textDark)
+                }
+                .frame(width: 92, alignment: .leading)
+                Toggle("", isOn: Binding(
+                    get: { sim.values[key] ?? false },
+                    set: { sim.setHMIInput(key, $0) }
+                ))
+                .labelsHidden()
+                .frame(width: 110, alignment: .leading)
+            } else {
+                Text(fmtNum(sim.num(key)))
+                    .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+                    .foregroundColor(Tia.textDark)
+                    .frame(width: 92, alignment: .leading)
+                Stepper("", value: Binding(
+                    get: { sim.num(key) },
+                    set: { sim.setOperandNum(key, $0) }
+                ), step: row.dataType == "Real" ? 0.5 : 1)
                 .labelsHidden()
                 .frame(width: 110, alignment: .leading)
             }

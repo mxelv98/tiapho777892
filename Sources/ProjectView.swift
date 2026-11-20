@@ -11,7 +11,7 @@ import SwiftUI
 // tabs are Properties | Info | Diagnostics | PLCSIM.
 
 enum OpenTab: String, Identifiable {
-    case device, block, tags, watch, hmi, sim
+    case device, block, tags, watch, hmi, sim, db, xref
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -21,6 +21,8 @@ enum OpenTab: String, Identifiable {
         case .watch: return "Watch table"
         case .hmi: return "KTP700 / Screen_1"
         case .sim: return "PLCSIM"
+        case .db: return "Data blocks"
+        case .xref: return "Cross-reference"
         }
     }
     var icon: String {
@@ -31,6 +33,8 @@ enum OpenTab: String, Identifiable {
         case .watch: return "binoculars"
         case .hmi: return "rectangle.on.rectangle"
         case .sim: return "play.rectangle"
+        case .db: return "cylinder.split.1x2"
+        case .xref: return "arrow.triangle.branch"
         }
     }
 }
@@ -260,8 +264,7 @@ struct ProjectView: View {
         case .device:
             DeviceConfigView(device: deviceBinding, sim: sim, online: online)
         case .block:
-            LadEditorView(device: deviceBinding, blockIndex: blockIndex, sim: sim,
-                          online: online, insertRequest: $insertRequest)
+            blockEditor
         case .tags:
             TagTableView(device: deviceBinding)
         case .watch:
@@ -272,6 +275,61 @@ struct ProjectView: View {
             HmiEditorView(hmi: hmiBinding, tags: device.tags, sim: sim) { showRuntime = true }
         case .sim:
             SimPanelView(device: device, sim: sim)
+        case .db:
+            DataBlocksView(device: deviceBinding, sim: sim)
+        case .xref:
+            CrossRefView(device: deviceBinding, hmi: hmiBinding, watch: project?.watchTags ?? []) { old, new in
+                if let w = store.project?.watchTags, w.contains(old) {
+                    store.updateWatch(w.map { $0 == old ? new : $0 })
+                }
+            }
+        }
+    }
+
+    private var blockLanguage: Binding<String> {
+        Binding(
+            get: { device.blocks.indices.contains(blockIndex) ? device.blocks[blockIndex].language : "LAD" },
+            set: { lang in
+                var d = device
+                guard d.blocks.indices.contains(blockIndex) else { return }
+                d.blocks[blockIndex].language = lang
+                if lang == "SCL" && (d.blocks[blockIndex].sclSource ?? "").isEmpty {
+                    d.blocks[blockIndex].sclSource = SclEditorView.template
+                }
+                device = d
+                store.updateDevice(d)
+            }
+        )
+    }
+
+    @ViewBuilder
+    private var blockEditor: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Text("Language").font(.system(size: 11, weight: .semibold)).foregroundColor(Tia.textDark)
+                Picker("", selection: blockLanguage) {
+                    ForEach(["LAD", "FBD", "SCL"], id: \.self) { Text($0).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 200)
+                Spacer()
+                Text(device.blocks.indices.contains(blockIndex) ? "\(device.blocks[blockIndex].name) [\(device.blocks[blockIndex].type)\(device.blocks[blockIndex].number)]" : "")
+                    .font(.system(size: 10.5)).foregroundColor(.secondary)
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 32)
+            .background(Tia.pane)
+            .overlay(Rectangle().frame(height: 0.7).foregroundColor(Tia.border), alignment: .bottom)
+            let lang = device.blocks.indices.contains(blockIndex) ? device.blocks[blockIndex].language : "LAD"
+            if lang == "FBD" {
+                FbdView(device: deviceBinding, blockIndex: blockIndex, sim: sim,
+                        online: online, insertRequest: $insertRequest)
+            } else if lang == "SCL" {
+                SclEditorView(device: deviceBinding, blockIndex: blockIndex, sim: sim)
+            } else {
+                LadEditorView(device: deviceBinding, blockIndex: blockIndex, sim: sim,
+                              online: online, insertRequest: $insertRequest)
+            }
         }
     }
 
@@ -292,8 +350,23 @@ struct ProjectView: View {
                         blockIndex = i; open(.block)
                     }
                 }
+                treeRow(icon: "plus.square", label: "Add block (FC)…", level: 3) {
+                    var d = device
+                    let n = d.blocks.count + 1
+                    var nb = PlcBlock(name: "Block_\(n)", number: n, type: "FC")
+                    nb.interfaceRows = [InterfaceVar(name: "Temp_1", section: "Temp", dataType: "Bool")]
+                    d.blocks.append(nb)
+                    device = d
+                    store.updateDevice(d)
+                    blockIndex = d.blocks.count - 1
+                    open(.block)
+                }
                 treeRow(icon: "tag", label: "PLC tags (\(device.tags.count))", level: 2,
                         selected: activeTab == .tags) { open(.tags) }
+                treeRow(icon: "cylinder.split.1x2", label: "Data blocks (\(device.dataBlocks?.count ?? 0))", level: 2,
+                        selected: activeTab == .db) { open(.db) }
+                treeRow(icon: "arrow.triangle.branch", label: "Cross-reference", level: 2,
+                        selected: activeTab == .xref) { open(.xref) }
                 treeRow(icon: "binoculars", label: "Watch table_1", level: 2,
                         selected: activeTab == .watch) { open(.watch) }
                 treeRow(icon: "rectangle.on.rectangle", label: "HMI_1 [KTP700 Basic]", level: 1, bold: true) {}

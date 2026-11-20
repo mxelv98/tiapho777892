@@ -28,6 +28,9 @@ struct HmiEditorView: View {
     @State private var armed: HmiElementKind? = nil
     @State private var armedSymbol: String? = nil
     @State private var showLibrary = false
+    @State private var showAlarms = false
+    @State private var showRecipes = false
+    @State private var showUsers = false
     @State private var dragOrigin: [UUID: CGPoint] = [:]
 
     private var screen: HmiScreen {
@@ -57,6 +60,9 @@ struct HmiEditorView: View {
                 armed = .symbol
             }
         }
+        .sheet(isPresented: $showAlarms) { HmiAlarmsSheet(hmi: $hmi, tags: tags) }
+        .sheet(isPresented: $showRecipes) { HmiRecipesSheet(hmi: $hmi, tags: tags) }
+        .sheet(isPresented: $showUsers) { HmiUsersSheet(hmi: $hmi) }
     }
 
     private var editorBar: some View {
@@ -79,6 +85,28 @@ struct HmiEditorView: View {
                 .foregroundColor(Tia.textDark)
             }
             Text("800 × 480").font(.system(size: 10.5)).foregroundColor(.secondary)
+            Divider().frame(height: 20)
+            Button { showAlarms = true } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: "bell.badge").font(.system(size: 11))
+                    Text("Alarms").font(.system(size: 11))
+                }.foregroundColor(Tia.textDark)
+            }
+            .buttonStyle(.plain)
+            Button { showRecipes = true } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: "list.clipboard").font(.system(size: 11))
+                    Text("Recipes").font(.system(size: 11))
+                }.foregroundColor(Tia.textDark)
+            }
+            .buttonStyle(.plain)
+            Button { showUsers = true } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: "person.2").font(.system(size: 11))
+                    Text("Users").font(.system(size: 11))
+                }.foregroundColor(Tia.textDark)
+            }
+            .buttonStyle(.plain)
             Spacer()
             Button(action: onRuntime) {
                 HStack(spacing: 4) {
@@ -146,7 +174,8 @@ struct HmiEditorView: View {
          (.bar, "Bar", "chart.bar"),
          (.gauge, "Gauge", "speedometer"),
          (.slider, "Slider", "slider.horizontal.3"),
-         (.toggleSwitch, "Switch", "switch.2")]
+         (.toggleSwitch, "Switch", "switch.2"),
+         (.trend, "Trend", "chart.line.uptrend.xyaxis")]
     }
 
     private func canvas(s: CGFloat) -> some View {
@@ -298,8 +327,10 @@ struct HmiEditorView: View {
                             .padding(.horizontal, 5).padding(.vertical, 2)
                             .background(Color.white)
                             .overlay(RoundedRectangle(cornerRadius: 3).stroke(Tia.border, lineWidth: 0.6))
-                    } else if sel.kind == .ioField || sel.kind == .bar || sel.kind == .gauge {
-                        Text("Bind a counter instance (e.g. BatchCounter) or a tag.")
+                    } else if sel.kind == .ioField || sel.kind == .bar || sel.kind == .gauge || sel.kind == .trend {
+                        Text(sel.kind == .trend
+                             ? "Bind a numeric tag or DB row — the trend draws its live history."
+                             : "Bind a counter instance (e.g. BatchCounter) or a tag.")
                             .font(.system(size: 10)).foregroundColor(.secondary).lineLimit(1)
                         TextField("Binding", text: elText(sel.id, keyPath: \.tag))
                             .font(.system(size: 11))
@@ -398,6 +429,7 @@ struct HmiEditorView: View {
         case .slider: size = (280, 56)
         case .toggleSwitch: size = (190, 60)
         case .symbol: size = (150, 130)
+        case .trend: size = (320, 150)
         }
         var el = HmiElement(kind: kind, text: kindLabel(kind))
         if kind == .symbol {
@@ -497,6 +529,7 @@ struct HmiEditorView: View {
         case .slider: return "Slider"
         case .toggleSwitch: return "Switch"
         case .symbol: return "Symbol"
+        case .trend: return "Trend"
         }
     }
 }
@@ -666,10 +699,11 @@ struct HmiElementFace: View {
                     HStack {
                         Text(el.text).font(.system(size: 11)).foregroundColor(.secondary).lineLimit(1)
                         Spacer()
-                        Text("\(sliderValue)").font(.system(size: 13, weight: .bold, design: .monospaced)).foregroundColor(Tia.textDark)
+                        Text(isNumericBinding ? fmtNum(sim.num(el.tag)) : "\(sliderValue)")
+                            .font(.system(size: 13, weight: .bold, design: .monospaced)).foregroundColor(Tia.textDark)
                     }
                     GeometryReader { g in
-                        let f = sliderFraction
+                        let f = isNumericBinding ? min(1, max(0, CGFloat(sim.num(el.tag)) / 100)) : sliderFraction
                         ZStack(alignment: .leading) {
                             Capsule().fill(Color(red: 0.88, green: 0.88, blue: 0.89)).frame(height: 6)
                             Capsule().fill(Tia.accent).frame(width: g.size.width * f, height: 6)
@@ -685,7 +719,11 @@ struct HmiElementFace: View {
                                 .onChanged { v in
                                     if interactive {
                                         let f2 = min(1, max(0, v.location.x / max(1, g.size.width)))
-                                        sim.setCounterValue(el.tag, Int((f2 * Double(sliderMax)).rounded()))
+                                        if isNumericBinding {
+                                            sim.setOperandNum(el.tag, Double(f2) * 100)
+                                        } else {
+                                            sim.setCounterValue(el.tag, Int((f2 * Double(sliderMax)).rounded()))
+                                        }
                                     }
                                 }
                         )
@@ -731,20 +769,64 @@ struct HmiElementFace: View {
                         sim.setHMIInput(el.tag, !on)
                     }
                 }
+            case .trend:
+                VStack(spacing: 2) {
+                    HStack {
+                        Text(el.text).font(.system(size: 10.5, weight: .semibold)).foregroundColor(Tia.textDark).lineLimit(1)
+                        Spacer()
+                        Text(fmtNum(sim.num(el.tag))).font(.system(size: 11, weight: .bold, design: .monospaced)).foregroundColor(Tia.tealText)
+                    }
+                    GeometryReader { g in
+                        let data = sim.history[el.tag] ?? []
+                        let hi = max(100.0, data.max() ?? 0)
+                        let lo = min(0.0, data.min() ?? 0)
+                        ZStack {
+                            Rectangle().fill(Color(red: 0.97, green: 0.98, blue: 0.99))
+                            ForEach(1..<4, id: \.self) { i in
+                                Rectangle().fill(Tia.border.opacity(0.4)).frame(height: 0.6)
+                                    .offset(y: g.size.height * CGFloat(i) / 4 - g.size.height / 2)
+                            }
+                            Path { p in
+                                guard data.count > 1 else { return }
+                                for (i, v) in data.enumerated() {
+                                    let x = g.size.width * CGFloat(i) / CGFloat(max(1, data.count - 1))
+                                    let y = g.size.height - g.size.height * CGFloat((v - lo) / max(1, hi - lo))
+                                    if i == 0 { p.move(to: CGPoint(x: x, y: y)) } else { p.addLine(to: CGPoint(x: x, y: y)) }
+                                }
+                            }
+                            .stroke(Tia.onlineTrue, lineWidth: 1.6)
+                        }
+                    }
+                    .overlay(RoundedRectangle(cornerRadius: 2).stroke(Tia.border, lineWidth: 0.8))
+                }
+                .padding(4)
+                .background(Color.white)
             }
         }
     }
 
     private var fieldValue: String {
         if let c = sim.counts[el.tag] { return "\(c)" }
+        if let n = sim.nums[el.tag] { return fmtNum(n) }
         if let v = sim.values[el.tag] { return v ? "TRUE" : "FALSE" }
         return el.tag.isEmpty ? "—" : "0"
     }
 
+    private func fmtNum(_ v: Double) -> String {
+        v == v.rounded() && abs(v) < 100000 ? String(Int(v)) : String(format: "%.1f", v)
+    }
+
     private var barFraction: CGFloat {
+        if sim.counts[el.tag] == nil, let n = sim.nums[el.tag] {
+            return min(1, max(0, CGFloat(n) / 100))
+        }
         let pv = sim.counterPV(el.tag)
         guard pv > 0 else { return on ? 1 : 0 }
         return min(1, max(0, CGFloat(sim.counts[el.tag] ?? 0) / CGFloat(pv)))
+    }
+
+    private var isNumericBinding: Bool {
+        sim.counts[el.tag] == nil && sim.nums[el.tag] != nil
     }
 
     private var sliderMax: Int {
@@ -1158,6 +1240,13 @@ struct HmiRuntimeView: View {
     @ObservedObject var sim: Simulator
     var onExit: () -> Void
     @State private var screenIndex = 0
+    @State private var currentUser: String? = nil
+    @State private var showLogin = false
+    @State private var pinEntry = ""
+
+    private var activeAlarms: [HmiAlarm] {
+        (hmi.alarms ?? []).filter { sim.values[$0.tag] ?? false }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1186,6 +1275,31 @@ struct HmiRuntimeView: View {
                     .foregroundColor(.white)
                 }
                 Spacer()
+                if let recipes = hmi.recipes, !recipes.isEmpty {
+                    Menu {
+                        ForEach(recipes) { r in
+                            Button("Apply: \(r.name)") {
+                                for v in r.values { sim.setOperandNum(v.tag, v.value) }
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 3) {
+                            Image(systemName: "list.clipboard").font(.system(size: 10.5))
+                            Text("Recipes").font(.system(size: 11, weight: .semibold))
+                        }
+                        .foregroundColor(.white)
+                    }
+                }
+                if let users = hmi.users, !users.isEmpty {
+                    Button { showLogin = true } label: {
+                        HStack(spacing: 3) {
+                            Image(systemName: "person.circle").font(.system(size: 11))
+                            Text(currentUser ?? "Login").font(.system(size: 11, weight: .semibold))
+                        }
+                        .foregroundColor(.white)
+                    }
+                    .buttonStyle(.plain)
+                }
                 Circle().fill(sim.powered ? (sim.running ? Tia.runGreen : .orange) : .gray).frame(width: 9, height: 9)
                 Text(sim.powered ? (sim.running ? "RUN" : "STOP") : "OFF")
                     .font(.system(size: 11, weight: .bold)).foregroundColor(.white)
@@ -1195,6 +1309,22 @@ struct HmiRuntimeView: View {
             .padding(.horizontal, 8)
             .frame(height: 28)
             .background(Tia.statusBarV3)
+            if let first = activeAlarms.first {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 11))
+                    Text(first.text.isEmpty ? first.name : first.text)
+                        .font(.system(size: 11.5, weight: .bold)).lineLimit(1)
+                    if activeAlarms.count > 1 {
+                        Text("+\(activeAlarms.count - 1) more").font(.system(size: 10.5, weight: .semibold))
+                    }
+                    Spacer()
+                    Text(first.alarmClass).font(.system(size: 10))
+                }
+                .foregroundColor(.white)
+                .padding(.horizontal, 8)
+                .frame(height: 22)
+                .background(first.alarmClass == "Errors" ? Tia.errorRed : Color.orange)
+            }
             GeometryReader { geo in
                 let s = min(geo.size.width / 800, geo.size.height / 480)
                 ZStack {
@@ -1229,6 +1359,164 @@ struct HmiRuntimeView: View {
         .background(Color(red: 0.16, green: 0.17, blue: 0.19))
         .onAppear {
             screenIndex = hmi.screens.indices.contains(hmi.startScreen) ? hmi.startScreen : 0
+        }
+        .alert("User login", isPresented: $showLogin) {
+            SecureField("PIN", text: $pinEntry)
+            Button("Cancel", role: .cancel) { pinEntry = "" }
+            Button("Log in") {
+                if let u = (hmi.users ?? []).first(where: { $0.pin == pinEntry && !pinEntry.isEmpty }) {
+                    currentUser = u.name
+                }
+                pinEntry = ""
+            }
+        } message: {
+            Text("Enter the PIN of a configured HMI user.")
+        }
+    }
+}
+
+// MARK: - HMI project data editors (v4.0): alarms, recipes, users
+
+struct HmiAlarmsSheet: View {
+    @Binding var hmi: HmiDevice
+    var tags: [PlcTag]
+    @Environment(\.dismiss) private var dismiss
+
+    private var alarms: Binding<[HmiAlarm]> {
+        Binding(get: { hmi.alarms ?? [] }, set: { hmi.alarms = $0 })
+    }
+
+    var body: some View {
+        NavigationView {
+            List {
+                ForEach(alarms) { $a in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            TextField("Alarm name", text: $a.name).font(.system(size: 13, weight: .semibold))
+                            Menu {
+                                ForEach(tags.filter { $0.dataType == "Bool" }) { t in
+                                    Button(t.name) { $a.wrappedValue.tag = t.name }
+                                }
+                            } label: {
+                                Text($a.wrappedValue.tag.isEmpty ? "Trigger tag" : $a.wrappedValue.tag).font(.system(size: 11.5)).foregroundColor(Tia.accent)
+                            }
+                            Button(role: .destructive) {
+                                alarms.wrappedValue.removeAll { $0.id == $a.id }
+                            } label: { Image(systemName: "trash").font(.system(size: 12)) }
+                        }
+                        TextField("Alarm text", text: $a.text).font(.system(size: 12.5))
+                        Picker("Class", selection: $a.alarmClass) {
+                            Text("Errors").tag("Errors")
+                            Text("Warnings").tag("Warnings")
+                        }
+                        .pickerStyle(.segmented)
+                    }
+                    .padding(.vertical, 2)
+                }
+                Button {
+                    alarms.wrappedValue.append(HmiAlarm(name: "Alarm_\(alarms.wrappedValue.count + 1)", text: "Alarm text"))
+                } label: { Label("Add alarm", systemImage: "plus") }
+            }
+            .navigationTitle("Discrete alarms")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
+    }
+}
+
+struct HmiRecipesSheet: View {
+    @Binding var hmi: HmiDevice
+    var tags: [PlcTag]
+    @Environment(\.dismiss) private var dismiss
+
+    private var recipes: Binding<[HmiRecipe]> {
+        Binding(get: { hmi.recipes ?? [] }, set: { hmi.recipes = $0 })
+    }
+    private var numericTags: [PlcTag] { tags.filter { $0.dataType != "Bool" } }
+
+    var body: some View {
+        NavigationView {
+            List {
+                ForEach(recipes) { $r in
+                    Section {
+                        ForEach($r.values) { $v in
+                            HStack {
+                                Menu {
+                                    ForEach(numericTags) { t in
+                                        Button(t.name) { $v.wrappedValue.tag = t.name }
+                                    }
+                                } label: {
+                                    Text($v.wrappedValue.tag.isEmpty ? "Operand" : $v.wrappedValue.tag).font(.system(size: 12)).foregroundColor(Tia.accent)
+                                }
+                                Spacer()
+                                Stepper(fmtNum(v.value), value: $v.value, step: 1)
+                                    .font(.system(size: 12, design: .monospaced))
+                                Button(role: .destructive) {
+                                    $r.values.wrappedValue.removeAll { $0.id == $v.id }
+                                } label: { Image(systemName: "minus.circle").font(.system(size: 12)) }
+                            }
+                        }
+                        Button {
+                            $r.values.wrappedValue.append(RecipeValue(tag: numericTags.first?.name ?? "", value: 0))
+                        } label: { Label("Add value", systemImage: "plus").font(.system(size: 12)) }
+                    } header: {
+                        HStack {
+                            TextField("Recipe name", text: $r.name).font(.system(size: 13, weight: .semibold))
+                            Button(role: .destructive) {
+                                recipes.wrappedValue.removeAll { $0.id == $r.id }
+                            } label: { Image(systemName: "trash").font(.system(size: 12)) }
+                        }
+                    }
+                }
+                Button {
+                    recipes.wrappedValue.append(HmiRecipe(name: "Recipe_\(recipes.wrappedValue.count + 1)"))
+                } label: { Label("Add recipe", systemImage: "plus") }
+            }
+            .navigationTitle("Recipes")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
+    }
+
+    private func fmtNum(_ v: Double) -> String {
+        v == v.rounded() && abs(v) < 100000 ? String(Int(v)) : String(format: "%.1f", v)
+    }
+}
+
+struct HmiUsersSheet: View {
+    @Binding var hmi: HmiDevice
+    @Environment(\.dismiss) private var dismiss
+
+    private var users: Binding<[HmiUser]> {
+        Binding(get: { hmi.users ?? [] }, set: { hmi.users = $0 })
+    }
+
+    var body: some View {
+        NavigationView {
+            List {
+                ForEach(users) { $u in
+                    HStack(spacing: 8) {
+                        TextField("User name", text: $u.name).font(.system(size: 13))
+                        TextField("PIN", text: $u.pin).font(.system(size: 13, design: .monospaced)).frame(width: 70)
+                        Picker("", selection: $u.group) {
+                            Text("Operators").tag("Operators")
+                            Text("Administrators").tag("Administrators")
+                        }
+                        .pickerStyle(.menu)
+                        Button(role: .destructive) {
+                            users.wrappedValue.removeAll { $0.id == $u.id }
+                        } label: { Image(systemName: "trash").font(.system(size: 12)) }
+                    }
+                }
+                Button {
+                    users.wrappedValue.append(HmiUser(name: "User_\(users.wrappedValue.count + 1)", pin: "1234"))
+                } label: { Label("Add user", systemImage: "plus") }
+                Text("Users log in from the Runtime's Login button with their PIN. Teaching build: login is shown in the runtime bar; it does not lock elements.")
+                    .font(.system(size: 11)).foregroundColor(.secondary)
+            }
+            .navigationTitle("User administration")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
     }
 }

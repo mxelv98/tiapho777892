@@ -62,14 +62,17 @@ struct WatchTableView: View {
     private func row(i: Int, name: String) -> some View {
         let tag = tags.first(where: { $0.name == name })
         let isCounter = sim.counts[name] != nil
+        let isNumeric = (tag?.dataType != nil && tag?.dataType != "Bool") || (tag == nil && sim.nums[name] != nil)
         let v = sim.values[name] ?? false
         return HStack(spacing: 0) {
             cell("\"\(name)\"", 150)
             cell(tag?.address ?? "—", 70)
-            cell(isCounter ? "DEC" : "BIN", 60)
+            cell(isCounter ? "DEC" : (isNumeric ? "DEC" : "BIN"), 60)
             HStack {
                 if isCounter {
                     Text("\(sim.counts[name] ?? 0)").font(.system(size: 12, weight: .semibold, design: .monospaced)).foregroundColor(Tia.tealText)
+                } else if isNumeric {
+                    Text(fmtNum(sim.num(name))).font(.system(size: 12, weight: .semibold, design: .monospaced)).foregroundColor(Tia.tealText)
                 } else {
                     Text(v ? "TRUE" : "FALSE")
                         .font(.system(size: 12, weight: .semibold, design: .monospaced))
@@ -78,7 +81,13 @@ struct WatchTableView: View {
                 Spacer()
             }.frame(width: 100).padding(.leading, 6)
             HStack {
-                if !isCounter {
+                if isNumeric {
+                    Stepper("", value: Binding(
+                        get: { sim.num(name) },
+                        set: { sim.setOperandNum(name, $0) }
+                    ), step: tag?.dataType == "Real" ? 0.5 : 1)
+                    .labelsHidden()
+                } else if !isCounter {
                     Button(v ? "0" : "1") { sim.setInput(name, !v) }
                         .font(.system(size: 11, weight: .bold))
                         .padding(.horizontal, 8).padding(.vertical, 3)
@@ -94,6 +103,10 @@ struct WatchTableView: View {
         }
         .padding(.vertical, 4)
         .background(i % 2 == 1 ? Tia.pane.opacity(0.55) : Color.white)
+    }
+
+    private func fmtNum(_ v: Double) -> String {
+        v == v.rounded() && abs(v) < 100000 ? String(Int(v)) : String(format: "%.1f", v)
     }
 
     private func cell(_ s: String, _ w: CGFloat, bold: Bool = false) -> some View {

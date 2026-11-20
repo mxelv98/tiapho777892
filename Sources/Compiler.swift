@@ -24,12 +24,16 @@ enum TiaCompiler {
                 }
             }
             let defined = Set(device.tags.map { $0.name })
+                .union((device.dataBlocks ?? []).flatMap { db in db.rows.map { "\(db.name).\($0.name)" } })
             for block in device.blocks {
                 let blockPath = "\(device.name) › Program blocks › \(block.name) (\(block.type)\(block.number))"
+                if block.language == "SCL" && (block.sclSource ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    warn(blockPath, "The SCL block has no source text yet.")
+                }
                 for (ni, net) in block.networks.enumerated() {
                     let netPath = blockPath + " › Network \(ni + 1)"
-                    let elements = net.series + net.parallel + [net.output]
-                    if net.series.isEmpty && net.parallel.isEmpty {
+                    let elements = net.series + net.branches.flatMap { $0 } + [net.output]
+                    if net.series.isEmpty && net.branches.isEmpty {
                         warn(netPath, "The network contains no instruction in the main rung.")
                     }
                     for el in elements {
@@ -52,6 +56,43 @@ enum TiaCompiler {
                             }
                             if el.tag.isEmpty { err(netPath, "The counter output (Q) has no tag.") }
                             else if !defined.contains(el.tag) { err(netPath, "The tag '\(el.tag)' is not defined in the tag table.") }
+                        case .tonr:
+                            if el.instance.isEmpty { err(netPath, "The timer has no instance name.") }
+                            if !el.inputTag.isEmpty && !defined.contains(el.inputTag) {
+                                err(netPath, "The TONR reset tag '\(el.inputTag)' is not defined.")
+                            }
+                        case .ctud:
+                            if el.instance.isEmpty { err(netPath, "The counter has no instance name.") }
+                            if !el.inputTag.isEmpty && !defined.contains(el.inputTag) {
+                                err(netPath, "The CD input tag '\(el.inputTag)' is not defined.")
+                            }
+                        case .sr, .rs:
+                            if el.instance.isEmpty { err(netPath, "The flip-flop has no instance name.") }
+                            if !el.inputTag.isEmpty && !defined.contains(el.inputTag) {
+                                err(netPath, "The reset tag '\(el.inputTag)' is not defined.")
+                            }
+                        case .cmp:
+                            if el.tag.isEmpty { err(netPath, "The comparator has no IN1 operand.") }
+                            else if !defined.contains(el.tag) && Double(el.tag) == nil {
+                                err(netPath, "The operand '\(el.tag)' is not defined.")
+                            }
+                            if !el.useConst && el.inputTag.isEmpty { err(netPath, "The comparator has no IN2 operand.") }
+                        case .math, .move:
+                            if el.tag.isEmpty { err(netPath, "The instruction has no IN operand.") }
+                            if el.outTag.isEmpty { err(netPath, "The instruction has no OUT operand.") }
+                            else if !defined.contains(el.outTag) { err(netPath, "The tag '\(el.outTag)' is not defined in the tag table.") }
+                        case .pid:
+                            if el.instance.isEmpty { err(netPath, "The PID has no instance name.") }
+                            if el.tag.isEmpty { err(netPath, "The PID has no setpoint operand.") }
+                            if el.inputTag.isEmpty { err(netPath, "The PID has no process-value operand.") }
+                            if el.outTag.isEmpty { err(netPath, "The PID has no output operand.") }
+                        case .jmp:
+                            if el.tag.isEmpty { err(netPath, "The jump has no label name.") }
+                            else if !block.networks.contains(where: { $0.output.kind == .label && $0.output.tag == el.tag }) {
+                                err(netPath, "The label '\(el.tag)' does not exist in this block.")
+                            }
+                        case .label, .ret:
+                            break
                         }
                         if (el.kind == .coil || el.kind == .coilSet),
                            let t = device.tags.first(where: { $0.name == el.tag }),

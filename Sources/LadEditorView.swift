@@ -17,6 +17,9 @@ import SwiftUI
 // Pinch zooms 50–200% with semantic levels; the HUD has a Fit button.
 // Part 2: the rung is drawn on one strict grid — thick rail, a stub of
 // exactly one cell, fixed cells, one centerline, output column aligned.
+// v4.0: the full instruction set (SR/RS, TONR, CTUD, CMP, MATH, MOVE,
+// PID, JMP/LABEL/RET), any number of parallel branches, undo/redo,
+// network duplication, and a Params sheet for box operands/constants.
 
 struct LadEditorView: View {
     @Binding var device: PlcDevice
@@ -29,18 +32,22 @@ struct LadEditorView: View {
     @State private var pinchStart: CGFloat? = nil
     @State private var showInterface = true
     @State private var selNet: Int? = nil
-    @State private var selPos: Int = -1          // series index; -2 = output; -3 = parallel idx encoded separately
-    @State private var selParallel: Int? = nil   // parallel index when selected
+    @State private var selPos: Int = -1          // index in series or in the selected branch; -2 = output
+    @State private var selBranch: Int? = nil     // branch index when a branch element is selected
     @State private var insNet: Int? = nil        // insertion target network
-    @State private var insPos: Int = 0           // insertion index in series (0...count)
-    @State private var insParallel = false       // insertion targets the parallel branch
+    @State private var insPos: Int = 0           // insertion index
+    @State private var insBranch: Int? = nil     // insertion targets this branch (nil = series)
     @State private var tagPickerFor: TagTarget? = nil
+    @State private var paramsFor: TagTarget? = nil
+    @State private var undoStack: [PlcBlock] = []
+    @State private var redoStack: [PlcBlock] = []
 
     struct TagTarget: Identifiable {
         var id = UUID()
         var net: Int
-        var pos: Int        // series index, or -2 for output
-        var parallel: Bool
+        var pos: Int        // series/branch index, or -2 for output
+        var branch: Int     // -1 = series, >= 0 = branch index
+        var field: String   // "tag" / "inputTag" / "outTag"
     }
 
     private var block: PlcBlock {
@@ -49,6 +56,10 @@ struct LadEditorView: View {
     private var live: Bool { online && sim.powered }
     private var showDetail: Bool { zoom >= 0.78 }        // semantic level: comments + (+) points
     private var z: CGFloat { zoom }
+    private var numericTags: [PlcTag] { device.tags.filter { $0.dataType != "Bool" } }
+    private var dbOperands: [String] {
+        (device.dataBlocks ?? []).flatMap { db in db.rows.map { "\(db.name).\($0.name)" } }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -88,10 +99,13 @@ struct LadEditorView: View {
             if let kind { insert(kind); insertRequest = nil }
         }
         .sheet(item: $tagPickerFor) { target in
-            TagPickerSheet(tags: device.tags) { name in
+            TagPickerSheet(tags: device.tags, extra: dbOperands) { name in
                 assignTag(target, name)
                 tagPickerFor = nil
             }
+        }
+        .sheet(item: $paramsFor) { target in
+            paramsSheet(target)
         }
     }
 
@@ -145,21 +159,36 @@ struct LadEditorView: View {
     }
 
     private var favoritesBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 4) {
-                ForEach(favorites, id: \.kind) { f in
-                    Button { insert(f.kind) } label: {
-                        Text(f.glyph)
-                            .font(.system(size: 12, weight: .bold, design: .monospaced))
-                            .foregroundColor(Tia.textDark)
-                            .frame(width: 42, height: 28)
-                            .background(Color.white)
-                            .overlay(RoundedRectangle(cornerRadius: 3).stroke(Tia.border, lineWidth: 0.7))
-                    }
-                    .buttonStyle(.plain)
-                }
+        HStack(spacing: 2) {
+            Button { undo() } label: {
+                Image(systemName: "arrow.uturn.backward").font(.system(size: 12, weight: .bold))
+                    .foregroundColor(undoStack.isEmpty ? .gray : Tia.textDark)
+                    .frame(width: 30, height: 28)
             }
-            .padding(.horizontal, 6)
+            .buttonStyle(.plain).disabled(undoStack.isEmpty)
+            Button { redo() } label: {
+                Image(systemName: "arrow.uturn.forward").font(.system(size: 12, weight: .bold))
+                    .foregroundColor(redoStack.isEmpty ? .gray : Tia.textDark)
+                    .frame(width: 30, height: 28)
+            }
+            .buttonStyle(.plain).disabled(redoStack.isEmpty)
+            Divider().frame(height: 22)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 4) {
+                    ForEach(favorites, id: \.kind) { f in
+                        Button { insert(f.kind) } label: {
+                            Text(f.glyph)
+                                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                                .foregroundColor(Tia.textDark)
+                                .frame(width: 42, height: 28)
+                                .background(Color.white)
+                                .overlay(RoundedRectangle(cornerRadius: 3).stroke(Tia.border, lineWidth: 0.7))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 6)
+            }
         }
         .frame(height: 36)
         .background(Tia.pane)
@@ -169,10 +198,11 @@ struct LadEditorView: View {
     private var favorites: [(kind: LadElementKind, glyph: String)] {
         [(.contactNO, "┤├"), (.contactNC, "┤/├"), (.coil, "( )"), (.coilSet, "(S)"),
          (.coilReset, "(R)"), (.pTrig, "┤P├"), (.nTrig, "┤N├"), (.notOp, "NOT"),
-         (.ton, "TON"), (.tof, "TOF"), (.tp, "TP"), (.ctu, "CTU"), (.ctd, "CTD")]
+         (.ton, "TON"), (.tof, "TOF"), (.tp, "TP"), (.tonr, "TONR"),
+         (.ctu, "CTU"), (.ctd, "CTD"), (.ctud, "CTUD"),
+         (.sr, "SR"), (.rs, "RS"), (.cmp, "CMP"), (.math, "MATH"),
+         (.move, "MOVE"), (.pid, "PID"), (.jmp, "JMP"), (.label, "LBL"), (.ret, "RET")]
     }
-
-    // MARK: Network rendering
 
     // MARK: Network rendering — strict grid geometry (Part 2)
     //
@@ -182,20 +212,22 @@ struct LadEditorView: View {
     // centerline; wires are horizontal or vertical only and run glyph
     // edge to glyph edge. The output element always lands in the same
     // right-hand column (blockUnits). Labels are positioned around the
-    // glyph and never move the centerline.
+    // glyph and never move the centerline. v4.0: branches are a list —
+    // each branch gets its own row under the main rung.
 
     private let cellW: CGFloat = 64
     private let railW: CGFloat = 9
 
     private func units(of el: LadElement) -> Int { isBox(el.kind) ? 2 : 1 }
     private func netUnits(_ net: LadNetwork) -> Int {
-        net.series.reduce(0) { $0 + units(of: $1) } + units(of: net.output)
+        let branchMax = net.branches.map { b in b.reduce(0) { $0 + units(of: $1) } }.max() ?? 0
+        return max(net.series.reduce(0) { $0 + units(of: $1) }, branchMax) + units(of: net.output)
     }
     private var blockUnits: Int { max(1, block.networks.map(netUnits).max() ?? 1) }
     private func colX(_ col: Int) -> CGFloat { railW + cellW + CGFloat(col) * cellW }
     private var contentW: CGFloat { max(colX(blockUnits) + 14, 330) }
     private func netHasBox(_ net: LadNetwork) -> Bool {
-        (net.series + net.parallel + [net.output]).contains { isBox($0.kind) }
+        (net.series + net.branches.flatMap { $0 } + [net.output]).contains { isBox($0.kind) }
     }
     private func rungH(_ net: LadNetwork) -> CGFloat { netHasBox(net) ? 108 : 78 }
     private func wireY(_ net: LadNetwork) -> CGFloat { netHasBox(net) ? 46 : 36 }
@@ -209,6 +241,10 @@ struct LadEditorView: View {
                 TextField("Title", text: titleBinding(ni))
                     .font(.system(size: 12 * z)).foregroundColor(Tia.textDark)
                 if selNet == ni {
+                    Button { duplicateNetwork(ni) } label: {
+                        Image(systemName: "square.on.square").font(.system(size: 11 * z)).foregroundColor(Tia.textDark)
+                    }
+                    .buttonStyle(.plain)
                     Button { deleteNetwork(ni) } label: {
                         Image(systemName: "trash").font(.system(size: 11 * z)).foregroundColor(Tia.errorRed)
                     }
@@ -231,22 +267,17 @@ struct LadEditorView: View {
 
     private func rungCanvas(_ ni: Int, _ net: LadNetwork) -> some View {
         let y = wireY(net)
-        let hasPar = !net.parallel.isEmpty
-        let by = y + 56
-        let canvasH = rungH(net) + (hasPar ? 56 : 0)
-        let flows = flowStates(net)
-        let bFlows = branchFlowStates(net)
+        let branchYs: [CGFloat] = net.branches.indices.map { y + 56 * CGFloat($0 + 1) }
+        let canvasH = rungH(net) + CGFloat(net.branches.count) * 56
+        let flows = flowFor(net.series)
+        let bFlows = net.branches.map { flowFor($0) }
         let seriesOut = flows.last ?? true
-        let branchOut = hasPar ? (bFlows.last ?? false) : false
+        let anyBranchOut = bFlows.map { $0.last ?? false }.contains(true)
         let outCol = blockUnits - units(of: net.output)
         var cols: [Int] = []
         var c = 0
         for el in net.series { cols.append(c); c += units(of: el) }
         let seriesEnd = c
-        var bcols: [Int] = []
-        var bc = 0
-        for el in net.parallel { bcols.append(bc); bc += units(of: el) }
-        let branchEnd = bc
         return ZStack(alignment: .topLeading) {
             // canvas background: taps on empty wire/space select the
             // network (cells above it take their own taps first)
@@ -264,39 +295,44 @@ struct LadEditorView: View {
                 hWire(x1: colX(seriesEnd), x2: colX(outCol) + (isBox(net.output.kind) ? 4 : 0), y: y, on: seriesOut)
             }
             if isBox(net.output.kind) && outCol == seriesEnd {
-                hWire(x1: colX(outCol), x2: colX(outCol) + 4, y: y, on: seriesOut || branchOut)
+                hWire(x1: colX(outCol), x2: colX(outCol) + 4, y: y, on: seriesOut || anyBranchOut)
             }
             ForEach(Array(net.series.enumerated()), id: \.element.id) { ei, el in
                 if isBox(el.kind) {
                     hWire(x1: colX(cols[ei]), x2: colX(cols[ei]) + 4, y: y, on: flows[ei])
                     hWire(x1: colX(cols[ei] + 2) - 4, x2: colX(cols[ei] + 2), y: y, on: flows[ei + 1])
                 }
-                cellView(ni: ni, ei: ei, el: el, parallel: false, isOutput: false,
+                cellView(ni: ni, ei: ei, el: el, branch: -1, isOutput: false,
                          colPt: colX(cols[ei]), rowTop: 0, rowH: rungH(net), cyLocal: y,
                          inOn: flows[ei], outOn: flows[ei + 1])
             }
-            cellView(ni: ni, ei: -2, el: net.output, parallel: false, isOutput: true,
+            cellView(ni: ni, ei: -2, el: net.output, branch: -1, isOutput: true,
                      colPt: colX(outCol), rowTop: 0, rowH: rungH(net), cyLocal: y,
-                     inOn: seriesOut || branchOut, outOn: seriesOut || branchOut)
-            if hasPar {
-                vWire(x: colX(0), y1: y, y2: by, on: true)
-                vWire(x: colX(outCol), y1: y, y2: by, on: branchOut)
+                     inOn: seriesOut || anyBranchOut, outOn: seriesOut || anyBranchOut)
+            if !net.branches.isEmpty {
+                let lastBy = branchYs[branchYs.count - 1]
+                vWire(x: colX(0), y1: y, y2: lastBy, on: true)
+                vWire(x: colX(outCol), y1: y, y2: lastBy, on: anyBranchOut)
                 junctionDot(x: colX(0), y: y, on: true)
-                junctionDot(x: colX(outCol), y: y, on: branchOut)
-                if branchEnd < outCol {
-                    hWire(x1: colX(branchEnd), x2: colX(outCol), y: by, on: branchOut)
-                }
-                ForEach(Array(net.parallel.enumerated()), id: \.element.id) { ei, el in
-                    if isBox(el.kind) {
-                        hWire(x1: colX(bcols[ei]), x2: colX(bcols[ei]) + 4, y: by, on: bFlows[ei])
-                        hWire(x1: colX(bcols[ei] + 2) - 4, x2: colX(bcols[ei] + 2), y: by, on: bFlows[ei + 1])
+                junctionDot(x: colX(outCol), y: y, on: anyBranchOut)
+                ForEach(Array(net.branches.enumerated()), id: \.offset) { bi, branch in
+                    let by = branchYs[bi]
+                    let bcols = branchCols(branch)
+                    ForEach(Array(branch.enumerated()), id: \.element.id) { ei, el in
+                        if isBox(el.kind) {
+                            hWire(x1: colX(bcols[ei]), x2: colX(bcols[ei]) + 4, y: by, on: bFlows[bi][ei])
+                            hWire(x1: colX(bcols[ei] + 2) - 4, x2: colX(bcols[ei] + 2), y: by, on: bFlows[bi][ei + 1])
+                        }
+                        cellView(ni: ni, ei: ei, el: el, branch: bi, isOutput: false,
+                                 colPt: colX(bcols[ei]), rowTop: by - 28, rowH: 56, cyLocal: 28,
+                                 inOn: bFlows[bi][ei], outOn: bFlows[bi][ei + 1])
                     }
-                    cellView(ni: ni, ei: ei, el: el, parallel: true, isOutput: false,
-                             colPt: colX(bcols[ei]), rowTop: by - 28, rowH: 56, cyLocal: 28,
-                             inOn: bFlows[ei], outOn: bFlows[ei + 1])
+                    if branchEnd(branch) < outCol {
+                        hWire(x1: colX(branchEnd(branch)), x2: colX(outCol), y: by, on: bFlows[bi].last ?? false)
+                    }
                 }
             }
-            if showDetail && insNet == ni && !insParallel {
+            if showDetail && insNet == ni && insBranch == nil {
                 ForEach(0...net.series.count, id: \.self) { p in
                     Image(systemName: "plus.circle.fill")
                         .font(.system(size: 15 * z))
@@ -305,17 +341,29 @@ struct LadEditorView: View {
                         .allowsHitTesting(false)
                 }
             }
-            if showDetail && insNet == ni && insParallel && hasPar {
-                ForEach(0...net.parallel.count, id: \.self) { p in
+            if showDetail && insNet == ni, let ib = insBranch, net.branches.indices.contains(ib) {
+                let branch = net.branches[ib]
+                let bcols = branchCols(branch)
+                ForEach(0...branch.count, id: \.self) { p in
                     Image(systemName: "plus.circle.fill")
                         .font(.system(size: 15 * z))
                         .foregroundColor(Tia.accent)
-                        .position(x: colX(p < bcols.count ? bcols[p] : branchEnd) * z, y: by * z)
+                        .position(x: colX(p < bcols.count ? bcols[p] : branchEnd(branch)) * z, y: branchYs[ib] * z)
                         .allowsHitTesting(false)
                 }
             }
         }
         .frame(width: contentW * z, height: canvasH * z)
+    }
+
+    private func branchCols(_ branch: [LadElement]) -> [Int] {
+        var out: [Int] = []
+        var c = 0
+        for el in branch { out.append(c); c += units(of: el) }
+        return out
+    }
+    private func branchEnd(_ branch: [LadElement]) -> Int {
+        branch.reduce(0) { $0 + units(of: $1) }
     }
 
     @ViewBuilder
@@ -348,12 +396,12 @@ struct LadEditorView: View {
     // MARK: Elements
 
     @ViewBuilder
-    private func cellView(ni: Int, ei: Int, el: LadElement, parallel: Bool, isOutput: Bool,
+    private func cellView(ni: Int, ei: Int, el: LadElement, branch: Int, isOutput: Bool,
                           colPt: CGFloat, rowTop: CGFloat, rowH: CGFloat, cyLocal: CGFloat,
                           inOn: Bool, outOn: Bool) -> some View {
         let selected = selNet == ni && (isOutput
-            ? (selParallel == nil && selPos == -2)
-            : (parallel ? selParallel == ei : (selParallel == nil && selPos == ei)))
+            ? (selBranch == nil && selPos == -2)
+            : (branch == -1 ? (selBranch == nil && selPos == ei) : (selBranch == branch && selPos == ei)))
         let wdt = CGFloat(units(of: el)) * cellW
         ZStack(alignment: .topLeading) {
             if selected {
@@ -364,6 +412,13 @@ struct LadEditorView: View {
             }
             if isBox(el.kind) {
                 boxCellContent(el, wdt: wdt, cy: cyLocal)
+            } else if isOutput && (el.kind == .jmp || el.kind == .label || el.kind == .ret) {
+                Text(el.kind == .ret ? "RET" : (el.kind == .jmp ? "JMP \(el.tag)" : "▸ \(el.tag)"))
+                    .font(.system(size: 10.5 * z, weight: .bold, design: .monospaced))
+                    .foregroundColor(Tia.textDark)
+                    .padding(.horizontal, 5 * z).padding(.vertical, 3 * z)
+                    .overlay(RoundedRectangle(cornerRadius: 2).stroke(Tia.wire, lineWidth: 0.9))
+                    .position(x: wdt / 2 * z, y: cyLocal * z)
             } else {
                 Text(addressOf(el.tag))
                     .font(.system(size: 10.5 * z, weight: .bold, design: .monospaced))
@@ -389,28 +444,36 @@ struct LadEditorView: View {
         .onTapGesture {
             selNet = ni
             if isOutput {
-                selParallel = nil; selPos = -2
-                insNet = ni; insPos = block.networks[ni].series.count; insParallel = false
-            } else if parallel {
-                selParallel = ei; selPos = -1
-                insNet = ni; insPos = ei + 1; insParallel = true
+                selBranch = nil; selPos = -2
+                insNet = ni; insPos = block.networks[ni].series.count; insBranch = nil
+            } else if branch >= 0 {
+                selBranch = branch; selPos = ei
+                insNet = ni; insPos = ei + 1; insBranch = branch
             } else {
-                selParallel = nil; selPos = ei
-                insNet = ni; insPos = ei + 1; insParallel = false
+                selBranch = nil; selPos = ei
+                insNet = ni; insPos = ei + 1; insBranch = nil
             }
         }
         .onLongPressGesture {
             selNet = ni
-            if isOutput { selParallel = nil; selPos = -2 }
-            else if parallel { selParallel = ei; selPos = -1 }
-            else { selParallel = nil; selPos = ei }
-            tagPickerFor = TagTarget(net: ni, pos: isOutput ? -2 : ei, parallel: parallel)
+            if isOutput { selBranch = nil; selPos = -2 }
+            else if branch >= 0 { selBranch = branch; selPos = ei }
+            else { selBranch = nil; selPos = ei }
+            tagPickerFor = TagTarget(net: ni, pos: isOutput ? -2 : ei, branch: branch, field: "tag")
+        }
+    }
+
+    private func boxHeight(_ kind: LadElementKind) -> CGFloat {
+        switch kind {
+        case .ctud: return 66
+        case .sr, .rs, .cmp, .move: return 40
+        default: return 53
         }
     }
 
     private func boxCellContent(_ el: LadElement, wdt: CGFloat, cy: CGFloat) -> some View {
         let bw = wdt - 8
-        let bh: CGFloat = 53
+        let bh = boxHeight(el.kind)
         return ZStack(alignment: .topLeading) {
             Text(el.instance.isEmpty ? "???" : el.instance)
                 .font(.system(size: 9.5 * z)).foregroundColor(.secondary)
@@ -421,6 +484,22 @@ struct LadEditorView: View {
         }
     }
 
+    private func boxRow(_ l: String, _ r: String, bold: Bool = false, green: Bool = false) -> some View {
+        HStack {
+            Text(l).font(.system(size: 9.5 * z)).foregroundColor(Tia.textDark)
+            Spacer()
+            Text(r).font(.system(size: 9.5 * z, weight: bold ? .bold : .semibold, design: .monospaced))
+                .foregroundColor(green && live ? Tia.onlineTrue : Tia.textDark)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 4 * z)
+        .frame(height: 13 * z)
+    }
+
+    private func fmtNum(_ v: Double) -> String {
+        v == v.rounded() && abs(v) < 100000 ? String(Int(v)) : String(format: "%.1f", v)
+    }
+
     private func boxBody(_ el: LadElement) -> some View {
         VStack(spacing: 0) {
             Text(kindName(el.kind))
@@ -428,25 +507,19 @@ struct LadEditorView: View {
                 .frame(maxWidth: .infinity)
                 .frame(height: 14 * z)
                 .background(Tia.boxHeader)
-            HStack {
-                Text(isTimer(el.kind) ? "IN" : (el.kind == .ctu ? "CU" : "CD"))
-                    .font(.system(size: 9.5 * z)).foregroundColor(Tia.textDark)
-                Spacer()
-                Text("Q").font(.system(size: 9.5 * z)).foregroundColor(Tia.textDark)
-                Circle()
-                    .fill((sim.values[el.tag] ?? false) && live ? Tia.onlineTrue : Color.gray.opacity(0.4))
-                    .frame(width: 7 * z, height: 7 * z)
-            }
-            .padding(.horizontal, 4 * z)
-            .frame(height: 13 * z)
-            HStack {
-                Text(isTimer(el.kind) ? "PT" : "PV").font(.system(size: 9.5 * z)).foregroundColor(Tia.textDark)
-                Spacer()
-                Text(el.preset).font(.system(size: 9.5 * z, weight: .semibold, design: .monospaced)).foregroundColor(Tia.textDark)
-            }
-            .padding(.horizontal, 4 * z)
-            .frame(height: 13 * z)
-            if isTimer(el.kind) {
+            switch el.kind {
+            case .ton, .tof, .tp, .tonr:
+                HStack {
+                    Text("IN").font(.system(size: 9.5 * z)).foregroundColor(Tia.textDark)
+                    Spacer()
+                    Text("Q").font(.system(size: 9.5 * z)).foregroundColor(Tia.textDark)
+                    Circle()
+                        .fill((sim.values[el.tag] ?? false) && live ? Tia.onlineTrue : Color.gray.opacity(0.4))
+                        .frame(width: 7 * z, height: 7 * z)
+                }
+                .padding(.horizontal, 4 * z)
+                .frame(height: 13 * z)
+                boxRow("PT", el.preset)
                 HStack {
                     Text("ET").font(.system(size: 9.5 * z)).foregroundColor(Tia.textDark)
                     Spacer()
@@ -456,39 +529,113 @@ struct LadEditorView: View {
                 }
                 .padding(.horizontal, 4 * z)
                 .frame(height: 13 * z)
-            }
-            if isCounter(el.kind) {
+            case .ctu, .ctd:
                 HStack {
-                    Text("CV").font(.system(size: 9.5 * z)).foregroundColor(Tia.textDark)
+                    Text(el.kind == .ctu ? "CU" : "CD").font(.system(size: 9.5 * z)).foregroundColor(Tia.textDark)
                     Spacer()
-                    Text("\(sim.counts[el.instance] ?? 0)")
-                        .font(.system(size: 9.5 * z, weight: .bold, design: .monospaced))
-                        .foregroundColor(live ? Tia.onlineTrue : Tia.textDark)
+                    Text("Q").font(.system(size: 9.5 * z)).foregroundColor(Tia.textDark)
+                    Circle()
+                        .fill((sim.values[el.tag] ?? false) && live ? Tia.onlineTrue : Color.gray.opacity(0.4))
+                        .frame(width: 7 * z, height: 7 * z)
                 }
                 .padding(.horizontal, 4 * z)
                 .frame(height: 13 * z)
+                boxRow("PV", el.preset)
+                boxRow("CV", "\(sim.counts[el.instance] ?? 0)", bold: true, green: true)
+            case .ctud:
+                boxRow("CU", "↑")
+                boxRow("CD", el.inputTag.isEmpty ? "—" : el.inputTag)
+                boxRow("PV", el.preset)
+                boxRow("CV", "\(sim.counts[el.instance] ?? 0)", bold: true, green: true)
+            case .sr, .rs:
+                HStack {
+                    Text("S").font(.system(size: 9.5 * z)).foregroundColor(Tia.textDark)
+                    Spacer()
+                    Text("Q").font(.system(size: 9.5 * z)).foregroundColor(Tia.textDark)
+                    Circle()
+                        .fill((sim.values[el.tag] ?? false) && live ? Tia.onlineTrue : Color.gray.opacity(0.4))
+                        .frame(width: 7 * z, height: 7 * z)
+                }
+                .padding(.horizontal, 4 * z)
+                .frame(height: 13 * z)
+                boxRow("R", el.inputTag.isEmpty ? "—" : el.inputTag)
+            case .cmp:
+                boxRow(shortName(el.tag), fmtNum(sim.num(el.tag)), green: true)
+                boxRow(el.op.isEmpty ? "GT" : el.op, el.useConst ? fmtNum(el.constValue) : "\(shortName(el.inputTag)) \(fmtNum(sim.num(el.inputTag)))", green: true)
+            case .math:
+                boxRow(shortName(el.tag), fmtNum(sim.num(el.tag)), green: true)
+                boxRow(el.useConst ? fmtNum(el.constValue) : shortName(el.inputTag),
+                       el.useConst ? "" : fmtNum(sim.num(el.inputTag)), green: true)
+                boxRow("→ \(shortName(el.outTag))", fmtNum(sim.num(el.outTag)), bold: true, green: true)
+            case .move:
+                boxRow(shortName(el.tag), fmtNum(sim.num(el.tag)), green: true)
+                boxRow("→ \(shortName(el.outTag))", fmtNum(sim.num(el.outTag)), bold: true, green: true)
+            case .pid:
+                boxRow("SP \(shortName(el.tag))", fmtNum(sim.num(el.tag)), green: true)
+                boxRow("PV \(shortName(el.inputTag))", fmtNum(sim.num(el.inputTag)), green: true)
+                boxRow("OUT \(shortName(el.outTag))", fmtNum(sim.num(el.outTag)) + " %", bold: true, green: true)
+            default:
+                EmptyView()
             }
         }
         .background(Tia.boxFillV3)
         .overlay(RoundedRectangle(cornerRadius: 2).stroke(Tia.wire, lineWidth: 0.9))
     }
 
+    private func shortName(_ s: String) -> String {
+        s.count <= 10 ? s : String(s.prefix(9)) + "…"
+    }
+
     // MARK: Floating action strip (selection)
 
-    private var actionStrip: some View {
-        HStack(spacing: 4) {
-            stripButton("Toggle", "arrow.triangle.2.circlepath") {
-                if let ni = selNet { toggleKind(ni, selParallel ?? selPos, parallel: selParallel != nil) }
-            }
-            stripButton("Tag", "tag") {
-                if let ni = selNet {
-                    tagPickerFor = TagTarget(net: ni, pos: selParallel ?? selPos, parallel: selParallel != nil)
-                }
-            }
-            stripButton("Branch", "arrow.branch") { addBranch() }
-            stripButton("Delete", "trash") { deleteSelected() }
+    private var selIsBox: Bool {
+        guard let el = selectedElement else { return false }
+        return isBox(el.kind)
+    }
+
+    private var selectedElement: LadElement? {
+        guard let ni = selNet, block.networks.indices.contains(ni) else { return nil }
+        let net = block.networks[ni]
+        if selPos == -2 { return net.output }
+        if let b = selBranch {
+            return net.branches.indices.contains(b) && net.branches[b].indices.contains(selPos) ? net.branches[b][selPos] : nil
         }
-        .padding(4)
+        return net.series.indices.contains(selPos) ? net.series[selPos] : nil
+    }
+
+    private var actionStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 4) {
+                stripButton("Toggle", "arrow.triangle.2.circlepath") {
+                    if let ni = selNet { toggleKind(ni, selPos, branch: selBranch ?? -1) }
+                }
+                stripButton("Tag", "tag") {
+                    if let ni = selNet {
+                        tagPickerFor = TagTarget(net: ni, pos: selPos, branch: selBranch ?? -1, field: "tag")
+                    }
+                }
+                if selIsBox {
+                    stripButton("IN2 / R", "arrow.right.to.line") {
+                        if let ni = selNet {
+                            tagPickerFor = TagTarget(net: ni, pos: selPos, branch: selBranch ?? -1, field: "inputTag")
+                        }
+                    }
+                    stripButton("OUT", "arrow.up.forward.square") {
+                        if let ni = selNet {
+                            tagPickerFor = TagTarget(net: ni, pos: selPos, branch: selBranch ?? -1, field: "outTag")
+                        }
+                    }
+                    stripButton("Params", "slider.horizontal.3") {
+                        if let ni = selNet {
+                            paramsFor = TagTarget(net: ni, pos: selPos, branch: selBranch ?? -1, field: "")
+                        }
+                    }
+                }
+                stripButton("Branch", "arrow.branch") { addBranch() }
+                stripButton("Delete", "trash") { deleteSelected() }
+            }
+            .padding(4)
+        }
         .background(Color.white)
         .overlay(RoundedRectangle(cornerRadius: 5).stroke(Tia.border, lineWidth: 0.8))
         .clipShape(RoundedRectangle(cornerRadius: 5))
@@ -502,7 +649,7 @@ struct LadEditorView: View {
                 Text(label).font(.system(size: 8.5))
             }
             .foregroundColor(Tia.textDark)
-            .frame(width: 48, height: 32)
+            .frame(width: 52, height: 32)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -522,72 +669,208 @@ struct LadEditorView: View {
         .buttonStyle(.plain)
     }
 
+    // MARK: Params sheet (box operands & constants)
+
+    private func elAt(_ t: TagTarget) -> LadElement? {
+        guard block.networks.indices.contains(t.net) else { return nil }
+        let net = block.networks[t.net]
+        if t.pos == -2 { return net.output }
+        if t.branch >= 0 {
+            return net.branches.indices.contains(t.branch) && net.branches[t.branch].indices.contains(t.pos)
+                ? net.branches[t.branch][t.pos] : nil
+        }
+        return net.series.indices.contains(t.pos) ? net.series[t.pos] : nil
+    }
+
+    private func mutateEl(_ t: TagTarget, _ change: (inout LadElement) -> Void) {
+        updateBlock { b in
+            guard b.networks.indices.contains(t.net) else { return }
+            if t.pos == -2 { change(&b.networks[t.net].output) }
+            else if t.branch >= 0 {
+                if b.networks[t.net].branches.indices.contains(t.branch),
+                   b.networks[t.net].branches[t.branch].indices.contains(t.pos) {
+                    change(&b.networks[t.net].branches[t.branch][t.pos])
+                }
+            } else if b.networks[t.net].series.indices.contains(t.pos) {
+                change(&b.networks[t.net].series[t.pos])
+            }
+        }
+    }
+
+    private func paramsSheet(_ target: TagTarget) -> some View {
+        let el = elAt(target) ?? LadElement()
+        return NavigationView {
+            Form {
+                Section(header: Text(kindName(el.kind))) {
+                    if el.kind == .cmp || el.kind == .math {
+                        Picker("Operation", selection: Binding(
+                            get: { el.op.isEmpty ? (el.kind == .cmp ? "GT" : "ADD") : el.op },
+                            set: { v in mutateEl(target) { $0.op = v } }
+                        )) {
+                            ForEach(el.kind == .cmp ? ["EQ", "NE", "GT", "GE", "LT", "LE"] : ["ADD", "SUB", "MUL", "DIV", "SHL", "SHR"], id: \.self) { Text($0) }
+                        }
+                        Toggle("IN2 is a constant", isOn: Binding(
+                            get: { el.useConst },
+                            set: { v in mutateEl(target) { $0.useConst = v } }
+                        ))
+                        if el.useConst {
+                            Stepper("Constant: \(fmtNum(el.constValue))", value: Binding(
+                                get: { el.constValue },
+                                set: { v in mutateEl(target) { $0.constValue = v } }
+                            ), step: 1)
+                        }
+                    }
+                    if isTimer(el.kind) {
+                        Stepper("PT: \(String(format: "%.1f", el.presetSeconds)) s", value: Binding(
+                            get: { el.presetSeconds },
+                            set: { v in mutateEl(target) { $0.presetSeconds = v; $0.preset = "T#\(fmtNum(v))s" } }
+                        ), in: 0.5...600, step: 0.5)
+                    }
+                    if isCounter(el.kind) {
+                        Stepper("PV: \(el.presetValue)", value: Binding(
+                            get: { el.presetValue },
+                            set: { v in mutateEl(target) { $0.presetValue = v; $0.preset = "\(v)" } }
+                        ), in: 1...999)
+                    }
+                    if el.kind == .pid {
+                        Stepper("Kp (gain): \(String(format: "%.1f", el.kp))", value: Binding(
+                            get: { el.kp }, set: { v in mutateEl(target) { $0.kp = v } }
+                        ), in: 0...50, step: 0.1)
+                        Stepper("Ti (integral): \(String(format: "%.1f", el.ti)) s", value: Binding(
+                            get: { el.ti }, set: { v in mutateEl(target) { $0.ti = v } }
+                        ), in: 0...300, step: 0.5)
+                        Stepper("Td (derivative): \(String(format: "%.1f", el.td)) s", value: Binding(
+                            get: { el.td }, set: { v in mutateEl(target) { $0.td = v } }
+                        ), in: 0...60, step: 0.1)
+                    }
+                    if !el.instance.isEmpty || isBox(el.kind) {
+                        HStack {
+                            Text("Instance").foregroundColor(.secondary)
+                            Spacer()
+                            Text(el.instance).font(.system(.body, design: .monospaced))
+                        }
+                    }
+                }
+                Section {
+                    Button("Done") { paramsFor = nil }
+                }
+            }
+            .navigationTitle("Instruction parameters")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+
     // MARK: Editing operations
 
     private func updateBlock(_ change: (inout PlcBlock) -> Void) {
         guard device.blocks.indices.contains(blockIndex) else { return }
+        undoStack.append(block)
+        if undoStack.count > 50 { undoStack.removeFirst() }
+        redoStack = []
         var b = device.blocks[blockIndex]
         change(&b)
+        for i in b.networks.indices { b.networks[i].syncParallel() }
         device.blocks[blockIndex] = b
+    }
+
+    private func undo() {
+        guard let prev = undoStack.popLast() else { return }
+        redoStack.append(block)
+        device.blocks[blockIndex] = prev
+    }
+
+    private func redo() {
+        guard let next = redoStack.popLast() else { return }
+        undoStack.append(block)
+        device.blocks[blockIndex] = next
     }
 
     private func insert(_ kind: LadElementKind) {
         let ni = insNet ?? selNet ?? (block.networks.count - 1)
         guard block.networks.indices.contains(ni) else { return }
         var el = LadElement(kind: kind)
-        if isBox(kind) {
+        let num1 = numericTags.first?.name ?? ""
+        let num2 = numericTags.dropFirst().first?.name ?? num1
+        let num3 = numericTags.dropFirst(2).first?.name ?? num2
+        switch kind {
+        case .ton, .tof, .tp:
             el.instance = "\(kindName(kind))_\(ni + 1)"
-            if isCounter(kind) { el.preset = "5"; el.presetValue = 5 }
+        case .tonr:
+            el.instance = "TONR_\(ni + 1)"; el.preset = "T#10s"; el.presetSeconds = 10
+        case .ctu, .ctd, .ctud:
+            el.instance = "\(kindName(kind))_\(ni + 1)"; el.preset = "5"; el.presetValue = 5
+        case .sr:
+            el.instance = "SR_\(ni + 1)"
+        case .rs:
+            el.instance = "RS_\(ni + 1)"
+        case .cmp:
+            el.op = "GT"; el.tag = num1; el.useConst = true; el.constValue = 10
+        case .math:
+            el.op = "ADD"; el.tag = num1; el.inputTag = num2; el.outTag = num2
+        case .move:
+            el.tag = num1; el.outTag = num2
+        case .pid:
+            el.instance = "PID_\(ni + 1)"; el.tag = num1; el.inputTag = num2; el.outTag = num3
+        case .jmp, .label:
+            el.tag = "LBL1"
+        default:
+            break
         }
-        if kind == .coil || kind == .coilSet || kind == .coilReset {
-            // a coil from the palette replaces the network output, like TIA
+        if kind == .coil || kind == .coilSet || kind == .coilReset || kind == .jmp || kind == .label || kind == .ret {
+            // coils and program-control elements live in the output slot, like TIA
             updateBlock { $0.networks[ni].output = el }
-            selNet = ni; selPos = -2; selParallel = nil
+            selNet = ni; selPos = -2; selBranch = nil
             return
         }
-        if insParallel && insNet == ni {
-            // insertion into the parallel branch, after the tapped element
-            let pos = min(insPos, block.networks[ni].parallel.count)
-            updateBlock { $0.networks[ni].parallel.insert(el, at: pos) }
-            selNet = ni; selParallel = pos; selPos = -1
+        if let ib = insBranch, insNet == ni, block.networks[ni].branches.indices.contains(ib) {
+            let pos = min(insPos, block.networks[ni].branches[ib].count)
+            updateBlock { $0.networks[ni].branches[ib].insert(el, at: pos) }
+            selNet = ni; selBranch = ib; selPos = pos
             insPos = pos + 1
             return
         }
         let pos = min(insPos, block.networks[ni].series.count)
         updateBlock { $0.networks[ni].series.insert(el, at: pos) }
-        selNet = ni; selPos = pos; selParallel = nil
+        selNet = ni; selPos = pos; selBranch = nil
         insPos = pos + 1
     }
 
-    private func toggleKind(_ ni: Int, _ pos: Int, parallel: Bool) {
-        updateBlock { b in
-            func flip(_ el: inout LadElement) {
-                switch el.kind {
-                case .contactNO: el.kind = .contactNC
-                case .contactNC: el.kind = .contactNO
-                case .pTrig: el.kind = .nTrig
-                case .nTrig: el.kind = .pTrig
-                case .coil: el.kind = .coilSet
-                case .coilSet: el.kind = .coilReset
-                case .coilReset: el.kind = .coil
-                default: break
-                }
-            }
-            if parallel {
-                if b.networks[ni].parallel.indices.contains(pos) { flip(&b.networks[ni].parallel[pos]) }
-            } else if pos == -2 {
-                flip(&b.networks[ni].output)
-            } else if b.networks[ni].series.indices.contains(pos) {
-                flip(&b.networks[ni].series[pos])
+    private func toggleKind(_ ni: Int, _ pos: Int, branch: Int) {
+        let target = TagTarget(net: ni, pos: pos, branch: branch, field: "")
+        mutateEl(target) { el in
+            switch el.kind {
+            case .contactNO: el.kind = .contactNC
+            case .contactNC: el.kind = .contactNO
+            case .pTrig: el.kind = .nTrig
+            case .nTrig: el.kind = .pTrig
+            case .coil: el.kind = .coilSet
+            case .coilSet: el.kind = .coilReset
+            case .coilReset: el.kind = .coil
+            case .sr: el.kind = .rs
+            case .rs: el.kind = .sr
+            case .cmp:
+                let ops = ["EQ", "NE", "GT", "GE", "LT", "LE"]
+                let i = ops.firstIndex(of: el.op) ?? 2
+                el.op = ops[(i + 1) % ops.count]
+            case .math:
+                let ops = ["ADD", "SUB", "MUL", "DIV", "SHL", "SHR"]
+                let i = ops.firstIndex(of: el.op) ?? 0
+                el.op = ops[(i + 1) % ops.count]
+            default: break
             }
         }
     }
 
     private func deleteSelected() {
         guard let ni = selNet else { return }
-        if let pi = selParallel {
-            updateBlock { if $0.networks[ni].parallel.indices.contains(pi) { $0.networks[ni].parallel.remove(at: pi) } }
-            selParallel = nil
+        if let b = selBranch {
+            updateBlock {
+                if $0.networks[ni].branches.indices.contains(b), $0.networks[ni].branches[b].indices.contains(selPos) {
+                    $0.networks[ni].branches[b].remove(at: selPos)
+                    if $0.networks[ni].branches[b].isEmpty { $0.networks[ni].branches.remove(at: b) }
+                }
+            }
+            selBranch = nil; selPos = -1
         } else if selPos >= 0 {
             updateBlock { if $0.networks[ni].series.indices.contains(selPos) { $0.networks[ni].series.remove(at: selPos) } }
             selPos = -1
@@ -596,24 +879,31 @@ struct LadEditorView: View {
 
     private func deleteNetwork(_ ni: Int) {
         updateBlock { if $0.networks.indices.contains(ni) { $0.networks.remove(at: ni) } }
-        selNet = nil; selPos = -1; selParallel = nil
+        selNet = nil; selPos = -1; selBranch = nil
+    }
+
+    private func duplicateNetwork(_ ni: Int) {
+        guard block.networks.indices.contains(ni) else { return }
+        var copy = block.networks[ni]
+        copy.id = UUID()
+        copy.title = copy.title + " (copy)"
+        copy.series = copy.series.map { var e = $0; e.id = UUID(); return e }
+        copy.branches = copy.branches.map { br in br.map { var e = $0; e.id = UUID(); return e } }
+        var out = copy.output; out.id = UUID(); copy.output = out
+        updateBlock { $0.networks.insert(copy, at: ni + 1) }
     }
 
     private func addBranch() {
         guard let ni = selNet else { return }
-        updateBlock { $0.networks[ni].parallel.append(LadElement(kind: .contactNO)) }
+        updateBlock { $0.networks[ni].branches.append([LadElement(kind: .contactNO)]) }
     }
 
     private func assignTag(_ target: TagTarget, _ name: String) {
-        updateBlock { b in
-            if target.parallel {
-                if b.networks[target.net].parallel.indices.contains(target.pos) {
-                    b.networks[target.net].parallel[target.pos].tag = name
-                }
-            } else if target.pos == -2 {
-                b.networks[target.net].output.tag = name
-            } else if b.networks[target.net].series.indices.contains(target.pos) {
-                b.networks[target.net].series[target.pos].tag = name
+        mutateEl(target) { el in
+            switch target.field {
+            case "inputTag": el.inputTag = name
+            case "outTag": el.outTag = name
+            default: el.tag = name
             }
         }
     }
@@ -628,53 +918,63 @@ struct LadEditorView: View {
     // MARK: Helpers
 
     private func addressOf(_ tag: String) -> String {
-        device.tags.first { $0.name == tag }?.address ?? "%??"
+        if tag.contains(".") { return tag }   // data-block operand
+        return device.tags.first { $0.name == tag }?.address ?? "%??"
     }
 
-    private func isBox(_ k: LadElementKind) -> Bool { isTimer(k) || isCounter(k) }
-    private func isTimer(_ k: LadElementKind) -> Bool { k == .ton || k == .tof || k == .tp }
-    private func isCounter(_ k: LadElementKind) -> Bool { k == .ctu || k == .ctd }
+    private func isBox(_ k: LadElementKind) -> Bool {
+        isTimer(k) || isCounter(k) || k == .sr || k == .rs || k == .cmp || k == .math || k == .move || k == .pid
+    }
+    private func isTimer(_ k: LadElementKind) -> Bool { k == .ton || k == .tof || k == .tp || k == .tonr }
+    private func isCounter(_ k: LadElementKind) -> Bool { k == .ctu || k == .ctd || k == .ctud }
     private func kindName(_ k: LadElementKind) -> String {
         switch k {
         case .ton: return "TON"
         case .tof: return "TOF"
         case .tp: return "TP"
+        case .tonr: return "TONR"
         case .ctu: return "CTU"
         case .ctd: return "CTD"
+        case .ctud: return "CTUD"
+        case .sr: return "SR"
+        case .rs: return "RS"
+        case .cmp: return "CMP"
+        case .math: return "MATH"
+        case .move: return "MOVE"
+        case .pid: return "PID"
         default: return ""
         }
     }
 
-    /// Prefix power flow through the series rung, for the online wire
-    /// colours. Mirrors the simulator's value table; edge contacts are
-    /// approximated by their current operand value.
-    private func flowStates(_ net: LadNetwork) -> [Bool] {
-        guard live else { return Array(repeating: true, count: net.series.count + 1) }
-        var states: [Bool] = []
-        var power = true
-        for el in net.series {
-            states.append(power)
-            switch el.kind {
-            case .notOp: power = !power
-            case .contactNC: power = power && !(sim.values[el.tag] ?? false)
-            default: power = power && (sim.values[el.tag] ?? false)
-            }
+    private func cmpLocal(_ el: LadElement) -> Bool {
+        let a = sim.num(el.tag)
+        let b = el.useConst ? el.constValue : sim.num(el.inputTag)
+        switch el.op {
+        case "EQ": return abs(a - b) < 0.0001
+        case "NE": return abs(a - b) >= 0.0001
+        case "GE": return a >= b
+        case "LT": return a < b
+        case "LE": return a <= b
+        default: return a > b
         }
-        states.append(power)
-        return states
     }
 
-    /// Prefix power flow through the parallel branch, same rule as the
-    /// series rung (the branch is fed from the left junction).
-    private func branchFlowStates(_ net: LadNetwork) -> [Bool] {
-        guard live else { return Array(repeating: true, count: net.parallel.count + 1) }
+    /// Prefix power flow through a rung (series or one branch), for the
+    /// online wire colours. Mirrors the simulator's semantics.
+    private func flowFor(_ elements: [LadElement]) -> [Bool] {
+        guard live else { return Array(repeating: true, count: elements.count + 1) }
         var states: [Bool] = []
         var power = true
-        for el in net.parallel {
+        for el in elements {
             states.append(power)
             switch el.kind {
             case .notOp: power = !power
             case .contactNC: power = power && !(sim.values[el.tag] ?? false)
+            case .cmp: power = power && cmpLocal(el)
+            case .ctu: power = power && (sim.counts[el.instance] ?? 0) >= el.presetValue
+            case .ctd: power = power && (sim.counts[el.instance] ?? el.presetValue) <= 0
+            case .ctud: power = power && (sim.counts[el.instance] ?? 0) >= el.presetValue
+            case .math, .move, .pid, .jmp, .label, .ret: break   // power passes through
             default: power = power && (sim.values[el.tag] ?? false)
             }
         }
@@ -770,6 +1070,7 @@ struct DashedLine: Shape {
 
 struct TagPickerSheet: View {
     var tags: [PlcTag]
+    var extra: [String] = []        // data-block operands ("DB.Row")
     var onPick: (String) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
@@ -788,6 +1089,21 @@ struct TagPickerSheet: View {
                             Text(t.name).font(.system(size: 13)).foregroundColor(Tia.textDark)
                             Spacer()
                             Text(t.dataType).font(.system(size: 11)).foregroundColor(.secondary)
+                        }
+                    }
+                }
+                if !extra.isEmpty {
+                    Section(header: Text("Data blocks")) {
+                        ForEach(extra.filter { query.isEmpty || $0.localizedCaseInsensitiveContains(query) }, id: \.self) { name in
+                            Button {
+                                onPick(name)
+                            } label: {
+                                HStack {
+                                    Image(systemName: "cylinder.split.1x2").font(.system(size: 11)).foregroundColor(Tia.labelTeal)
+                                    Text(name).font(.system(size: 13)).foregroundColor(Tia.textDark)
+                                    Spacer()
+                                }
+                            }
                         }
                     }
                 }

@@ -44,6 +44,11 @@ enum Catalog {
         CatalogFamily(title: "CPU 1217C", entries: [
             CatalogEntry(name: "CPU 1217C DC/DC/DC", article: "6ES7 217-1AG40-0XB0", version: "V4.4", family: "CPU 1217C", desc: "14 DI (4 HSC 1 MHz) / 10 DQ, 2 AI / 2 AQ")
         ]),
+        CatalogFamily(title: "CPU S7-1500", entries: [
+            CatalogEntry(name: "CPU 1511-1 PN", article: "6ES7 511-1AK02-0AB0", version: "V2.9", family: "S7-1500", desc: "S7-1500 compact, 1 PROFINET interface, 175 KB work memory"),
+            CatalogEntry(name: "CPU 1513-1 PN", article: "6ES7 513-1AL02-0AB0", version: "V2.9", family: "S7-1500", desc: "S7-1500, 1 PROFINET interface, 300 KB work memory"),
+            CatalogEntry(name: "CPU 1515-2 PN", article: "6ES7 515-2AM02-0AB0", version: "V2.9", family: "S7-1500", desc: "S7-1500, 2 PROFINET interfaces, 500 KB work memory")
+        ]),
         CatalogFamily(title: "Digital input SM 1221", entries: [
             CatalogEntry(name: "SM 1221 DI 8x24VDC", article: "6ES7 221-1BF32-0XB0", version: "V2.0", family: "SM 1221", desc: "8 digital inputs, 24 V DC, sink/source"),
             CatalogEntry(name: "SM 1221 DI 16x24VDC", article: "6ES7 221-1BH32-0XB0", version: "V2.0", family: "SM 1221", desc: "16 digital inputs, 24 V DC, sink/source")
@@ -133,52 +138,87 @@ enum InstructionCatalog {
             InstructionItem(name: "TP — Generate pulse", symbol: "TP", kind: .tp),
             InstructionItem(name: "TON — Generate on-delay", symbol: "TON", kind: .ton),
             InstructionItem(name: "TOF — Generate off-delay", symbol: "TOF", kind: .tof),
-            InstructionItem(name: "TONR — Time accumulator", symbol: "TONR", kind: nil)
+            InstructionItem(name: "TONR — Time accumulator", symbol: "TONR", kind: .tonr)
         ]),
         InstructionFamily(title: "Counter operations", items: [
             InstructionItem(name: "CTU — Count up", symbol: "CTU", kind: .ctu),
             InstructionItem(name: "CTD — Count down", symbol: "CTD", kind: .ctd),
-            InstructionItem(name: "CTUD — Count up and down", symbol: "CTUD", kind: nil)
+            InstructionItem(name: "CTUD — Count up and down", symbol: "CTUD", kind: .ctud)
+        ]),
+        InstructionFamily(title: "Flip-flops", items: [
+            InstructionItem(name: "SR — Reset-dominant bistable", symbol: "SR", kind: .sr),
+            InstructionItem(name: "RS — Set-dominant bistable", symbol: "RS", kind: .rs)
         ]),
         InstructionFamily(title: "Comparator operations", items: [
-            InstructionItem(name: "CMP == Equal", symbol: "==", kind: nil),
-            InstructionItem(name: "CMP <> Not equal", symbol: "<>", kind: nil),
-            InstructionItem(name: "CMP >= Greater or equal", symbol: ">=", kind: nil),
-            InstructionItem(name: "CMP <= Less or equal", symbol: "<=", kind: nil),
+            InstructionItem(name: "CMP == Equal", symbol: "==", kind: .cmp),
+            InstructionItem(name: "CMP <> Not equal", symbol: "<>", kind: .cmp),
+            InstructionItem(name: "CMP > Greater than", symbol: ">", kind: .cmp),
+            InstructionItem(name: "CMP >= Greater or equal", symbol: ">=", kind: .cmp),
+            InstructionItem(name: "CMP < Less than", symbol: "<", kind: .cmp),
+            InstructionItem(name: "CMP <= Less or equal", symbol: "<=", kind: .cmp),
             InstructionItem(name: "IN_RANGE", symbol: "IN_R", kind: nil)
         ]),
         InstructionFamily(title: "Math functions", items: [
-            InstructionItem(name: "ADD", symbol: "ADD", kind: nil),
-            InstructionItem(name: "SUB", symbol: "SUB", kind: nil),
-            InstructionItem(name: "MUL", symbol: "MUL", kind: nil),
-            InstructionItem(name: "DIV", symbol: "DIV", kind: nil),
+            InstructionItem(name: "ADD", symbol: "ADD", kind: .math),
+            InstructionItem(name: "SUB", symbol: "SUB", kind: .math),
+            InstructionItem(name: "MUL", symbol: "MUL", kind: .math),
+            InstructionItem(name: "DIV", symbol: "DIV", kind: .math),
+            InstructionItem(name: "SHL — Shift left", symbol: "SHL", kind: .math),
+            InstructionItem(name: "SHR — Shift right", symbol: "SHR", kind: .math),
             InstructionItem(name: "CALCULATE", symbol: "CALC", kind: nil)
         ]),
         InstructionFamily(title: "Move operations", items: [
-            InstructionItem(name: "MOVE", symbol: "MOVE", kind: nil),
+            InstructionItem(name: "MOVE", symbol: "MOVE", kind: .move),
             InstructionItem(name: "MOVE_BLK", symbol: "M_BLK", kind: nil),
             InstructionItem(name: "FILL_BLK", symbol: "FILL", kind: nil)
         ]),
         InstructionFamily(title: "Program control", items: [
-            InstructionItem(name: "JMP — Jump if RLO = 1", symbol: "JMP", kind: nil),
-            InstructionItem(name: "LABEL", symbol: "LBL", kind: nil),
-            InstructionItem(name: "RET — Return", symbol: "RET", kind: nil)
+            InstructionItem(name: "JMP — Jump if RLO = 1", symbol: "JMP", kind: .jmp),
+            InstructionItem(name: "LABEL", symbol: "LBL", kind: .label),
+            InstructionItem(name: "RET — Return", symbol: "RET", kind: .ret)
+        ]),
+        InstructionFamily(title: "Technology", items: [
+            InstructionItem(name: "PID_Compact (teaching model)", symbol: "PID", kind: .pid)
         ])
     ]
 
     static func makeElement(_ item: InstructionItem, tags: [PlcTag]) -> LadElement? {
         guard let kind = item.kind else { return nil }
         var el = LadElement(kind: kind)
+        let nums = tags.filter { $0.dataType != "Bool" }
+        let n1 = nums.first?.name ?? ""
+        let n2 = nums.dropFirst().first?.name ?? n1
+        let n3 = nums.dropFirst(2).first?.name ?? n2
         switch kind {
         case .contactNO, .contactNC, .coil, .coilSet, .coilReset, .pTrig, .nTrig:
             el.tag = tags.first?.name ?? ""
         case .ton, .tof, .tp:
             el.instance = "\(kind.rawValue.uppercased())_1"
             el.preset = "T#3s"; el.presetSeconds = 3
-        case .ctu, .ctd:
+        case .tonr:
+            el.instance = "TONR_1"
+            el.preset = "T#10s"; el.presetSeconds = 10
+        case .ctu, .ctd, .ctud:
             el.instance = "\(kind.rawValue.uppercased())_1"
             el.preset = "5"; el.presetValue = 5
-        case .notOp:
+        case .sr:
+            el.instance = "SR_1"
+        case .rs:
+            el.instance = "RS_1"
+        case .cmp:
+            el.op = ["==": "EQ", "<>": "NE", ">": "GT", ">=": "GE", "<": "LT", "<=": "LE"][item.symbol] ?? "GT"
+            el.tag = n1; el.useConst = true; el.constValue = 10
+        case .math:
+            el.op = item.symbol
+            el.tag = n1; el.inputTag = n2; el.outTag = n2
+        case .move:
+            el.tag = n1; el.outTag = n2
+        case .pid:
+            el.instance = "PID_1"
+            el.tag = n1; el.inputTag = n2; el.outTag = n3
+        case .jmp, .label:
+            el.tag = "LBL1"
+        case .notOp, .ret:
             break
         }
         return el
