@@ -14,6 +14,14 @@ targets:
         CFBundleDisplayName: Tia Phone
         CFBundleShortVersionString: "2.0"
         CFBundleVersion: "2"
+        CFBundleIcons:
+          CFBundlePrimaryIcon:
+            CFBundleIconFiles: [AppIcon60x60@2x, AppIcon60x60@3x]
+            CFBundleIconName: AppIcon
+        CFBundleIcons~ipad:
+          CFBundlePrimaryIcon:
+            CFBundleIconFiles: [AppIcon76x76@2x, AppIcon83.5x83.5@2x]
+            CFBundleIconName: AppIcon
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight, UIInterfaceOrientationPortrait]
         UIFileSharingEnabled: true
