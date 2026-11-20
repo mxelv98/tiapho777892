@@ -104,8 +104,13 @@ struct LadEditorView: View {
             p.move(to: CGPoint(x: 11, y: 17)); p.addLine(to: CGPoint(x: 29, y: 3)) }
         case "|P|", "|N|":
             ZStack {
-                glyph("| |")
+                glyphPath { p in
+                    p.move(to: CGPoint(x: 2, y: 10)); p.addLine(to: CGPoint(x: 13, y: 10))
+                    p.move(to: CGPoint(x: 13, y: 3)); p.addLine(to: CGPoint(x: 13, y: 17))
+                    p.move(to: CGPoint(x: 27, y: 3)); p.addLine(to: CGPoint(x: 27, y: 17))
+                    p.move(to: CGPoint(x: 27, y: 10)); p.addLine(to: CGPoint(x: 38, y: 10)) }
                 Text(s == "|P|" ? "P" : "N").font(.system(size: 9, weight: .bold)).foregroundColor(Tia.textDark)
+                    .background(Color.white)
             }
         case "( )", "(S)", "(R)":
             ZStack {
