@@ -12,8 +12,8 @@ targets:
       path: Config/Info.plist
       properties:
         CFBundleDisplayName: Tia Phone
-        CFBundleShortVersionString: "3.2"
-        CFBundleVersion: "5"
+        CFBundleShortVersionString: "3.3"
+        CFBundleVersion: "6"
         CFBundleIcons:
           CFBundlePrimaryIcon:
             CFBundleIconFiles: [AppIcon60x60@2x, AppIcon60x60@3x]
