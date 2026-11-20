@@ -607,7 +607,7 @@ struct ProjectView: View {
     }
 
     private func compile() {
-        diagnostics = Compiler.compile(device)
+        diagnostics = TiaCompiler.compile(project: project)
         compiled = !diagnostics.contains(where: { $0.isError })
         inspectorTab = 1
     }

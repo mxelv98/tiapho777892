@@ -23,6 +23,12 @@ enum Tia {
     static let textDark = Color(red: 0.10, green: 0.10, blue: 0.11)
     static let boxFill = Color(red: 0.93, green: 0.94, blue: 0.96)       // TON/CTU box fill
     static let fontSize: CGFloat = 12
+    // v2 aliases used by the newer editors
+    static let toolbar = Color(red: 0.95, green: 0.95, blue: 0.96)
+    static let headerBand = Color(red: 0.90, green: 0.91, blue: 0.93)
+    static let boxHeader = Color(red: 0.85, green: 0.87, blue: 0.90)
+    static let tealText = Color(red: 0.0, green: 0.45, blue: 0.55)
+    static let wire = Color(red: 0.15, green: 0.15, blue: 0.16)
 }
 
 struct PaneHeader: View {
