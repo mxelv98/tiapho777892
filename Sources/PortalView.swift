@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// TIA Portal "Portal view" — the start screen, laid out like the real one:
 /// task list on the left, first steps + recent projects in the middle.
@@ -7,6 +8,8 @@ struct PortalView: View {
     @State private var showCreate = false
     @State private var newName = ""
     @State private var selected: String? = "open"
+    @State private var showImporter = false
+    @State private var importNote = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -73,7 +76,16 @@ struct PortalView: View {
                             .font(.system(size: 12.5))
                     } else {
                         Text("Open existing project").font(.system(size: 15, weight: .semibold))
-                        Text("Recent projects").font(.system(size: 12, weight: .semibold)).foregroundColor(.secondary)
+                        HStack {
+                            Text("Recent projects").font(.system(size: 12, weight: .semibold)).foregroundColor(.secondary)
+                            Spacer()
+                            Button { showImporter = true } label: {
+                                Label("Import file", systemImage: "square.and.arrow.down").font(.system(size: 12))
+                            }
+                        }
+                        if !importNote.isEmpty {
+                            Text(importNote).font(.system(size: 11.5)).foregroundColor(Tia.accent)
+                        }
                         if store.recents.isEmpty {
                             Text("No projects yet.").foregroundColor(.secondary)
                         }
@@ -85,6 +97,10 @@ struct PortalView: View {
                                     Text("Documents/Projects/\(name)").font(.system(size: 10.5)).foregroundColor(.secondary)
                                 }
                                 Spacer()
+                                if let p = store.loadProject(name: name), let url = store.exportURL(p) {
+                                    ShareLink(item: url) { Image(systemName: "square.and.arrow.up") }
+                                        .foregroundColor(Tia.accent)
+                                }
                                 Button("Open") { store.open(name: name) }
                                 Button(role: .destructive) { store.delete(name: name) } label: { Image(systemName: "trash") }
                             }
@@ -102,6 +118,13 @@ struct PortalView: View {
         }
         .background(Tia.pane)
         .sheet(isPresented: $showCreate) { EmptyView() }
+        .fileImporter(isPresented: $showImporter, allowedContentTypes: [.json]) { result in
+            if case .success(let url) = result, let name = store.importProject(from: url) {
+                importNote = "Imported \(name) — tap Open to start it."
+            } else {
+                importNote = "That file is not a Tia Phone project."
+            }
+        }
     }
 
     private func portalTask(_ title: String, _ icon: String, _ key: String) -> some View {

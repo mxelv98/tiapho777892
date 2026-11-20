@@ -105,4 +105,28 @@ final class ProjectStore: ObservableObject {
         try? data.write(to: url)
         return url
     }
+
+    /// Decode a saved project without opening it (used for export/share).
+    func loadProject(name: String) -> TiaProject? {
+        guard let data = try? Data(contentsOf: fileURL(name)) else { return nil }
+        return try? JSONDecoder().decode(TiaProject.self, from: data)
+    }
+
+    /// Import a project file (.tiaphone.json) picked by the user, so new
+    /// projects can be added without rebuilding the app. The project is
+    /// saved under its own name; on a name clash the imported copy is
+    /// renamed "Name (imported)" so nothing is overwritten. Returns the
+    /// final project name, or nil if the file is not a Tia Phone project.
+    @discardableResult
+    func importProject(from url: URL) -> String? {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        guard let data = try? Data(contentsOf: url),
+              var p = try? JSONDecoder().decode(TiaProject.self, from: data),
+              !p.devices.isEmpty else { return nil }
+        if fileExists(p.name) { p.name = p.name + " (imported)" }
+        save(p)
+        touch(p.name)
+        return p.name
+    }
 }
