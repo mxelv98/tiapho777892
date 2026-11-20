@@ -437,6 +437,44 @@ final class Simulator: ObservableObject {
             let l = (nums["TankLevel"] ?? 0) + fill - drain
             nums["TankLevel"] = max(0, min(100, l))
         }
+        // MixingPlant (v4.1): three vessels. Filling integrates a totalizer
+        // (how much water was filled, in litres), transfer pumps move the
+        // volume between vessels, heaters warm vessels whose heater coil
+        // is on (the LAD adds the low-level interlock), agitator speeds
+        // follow their coils.
+        if nums["PremixLevel"] != nil {
+            if bit("ValveV1301") {
+                let add = min(0.35, 100 - (nums["PremixLevel"] ?? 0))
+                if add > 0 {
+                    nums["PremixLevel"] = (nums["PremixLevel"] ?? 0) + add
+                    nums["PremixTotal"] = (nums["PremixTotal"] ?? 0) + add
+                }
+            }
+            if bit("Pump1") {
+                let mv = min(0.3, nums["PremixLevel"] ?? 0, 100 - (nums["PrepLevel"] ?? 0))
+                if mv > 0 {
+                    nums["PremixLevel"] = (nums["PremixLevel"] ?? 0) - mv
+                    nums["PrepLevel"] = (nums["PrepLevel"] ?? 0) + mv
+                }
+            }
+            if bit("Pump2") {
+                let mv = min(0.3, nums["PrepLevel"] ?? 0, 100 - (nums["StorageLevel"] ?? 0))
+                if mv > 0 {
+                    nums["PrepLevel"] = (nums["PrepLevel"] ?? 0) - mv
+                    nums["StorageLevel"] = (nums["StorageLevel"] ?? 0) + mv
+                }
+            }
+            if bit("DrainOpen") {
+                nums["StorageLevel"] = max(0, (nums["StorageLevel"] ?? 0) - 0.4)
+            }
+            if bit("Heater1") { nums["PremixTemp"] = min(90, (nums["PremixTemp"] ?? 20) + 0.05) }
+            if bit("Heater2") { nums["PrepTemp"] = min(90, (nums["PrepTemp"] ?? 20) + 0.05) }
+            for k in ["PremixTemp", "PrepTemp"] {
+                if let t = nums[k], t > 20 { nums[k] = t - (t - 20) * 0.0004 }
+            }
+            nums["Agitator1RPM"] = bit("Agitator1") ? 25 : 0
+            nums["Agitator2RPM"] = bit("Agitator2") ? 15 : 0
+        }
     }
 
     // MARK: - Timers / counters / outputs

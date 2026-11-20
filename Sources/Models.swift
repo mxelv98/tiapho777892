@@ -488,6 +488,99 @@ struct TiaProject: Identifiable, Codable {
         p.hmi = hmi
         return p
     }
+
+    /// v4.1 — MixingPlant: a three-vessel plant in the style of a real
+    /// process HMI (pre-mix → preparation → storage). Tap the fill valve
+    /// on the HMI and the vessel fills while a totalizer counts the
+    /// litres; transfer pumps move the water on; heaters warm a vessel
+    /// only above a safe level (interlock in the LAD); agitators stir.
+    static func plantProject() -> TiaProject {
+        var p = newProject(name: "MixingPlant")
+        p.devices[0].tags = [
+            PlcTag(name: "FillValve", dataType: "Bool", address: "%I0.0", comment: "Fill valve command (HMI)"),
+            PlcTag(name: "Pump1Cmd", dataType: "Bool", address: "%I0.1", comment: "Transfer pump 1 command"),
+            PlcTag(name: "Pump2Cmd", dataType: "Bool", address: "%I0.2", comment: "Transfer pump 2 command"),
+            PlcTag(name: "Heat1Cmd", dataType: "Bool", address: "%I0.3", comment: "Heater 1 command"),
+            PlcTag(name: "Heat2Cmd", dataType: "Bool", address: "%I0.4", comment: "Heater 2 command"),
+            PlcTag(name: "Agit1Cmd", dataType: "Bool", address: "%I0.5", comment: "Agitator 1 command"),
+            PlcTag(name: "Agit2Cmd", dataType: "Bool", address: "%I0.6", comment: "Agitator 2 command"),
+            PlcTag(name: "DrainValve", dataType: "Bool", address: "%I0.7", comment: "Storage drain command"),
+            PlcTag(name: "ValveV1301", dataType: "Bool", address: "%Q0.0", comment: "Fill valve output"),
+            PlcTag(name: "Pump1", dataType: "Bool", address: "%Q0.1", comment: "Transfer pump pre-mix to preparation"),
+            PlcTag(name: "Pump2", dataType: "Bool", address: "%Q0.2", comment: "Transfer pump preparation to storage"),
+            PlcTag(name: "Heater1", dataType: "Bool", address: "%Q0.3", comment: "Pre-mix heater"),
+            PlcTag(name: "Heater2", dataType: "Bool", address: "%Q0.4", comment: "Preparation heater"),
+            PlcTag(name: "Agitator1", dataType: "Bool", address: "%Q0.5", comment: "Pre-mix agitator"),
+            PlcTag(name: "Agitator2", dataType: "Bool", address: "%Q0.6", comment: "Preparation agitator"),
+            PlcTag(name: "DrainOpen", dataType: "Bool", address: "%Q0.7", comment: "Storage drain valve"),
+            PlcTag(name: "PremixLevel", dataType: "Real", address: "%MD0", comment: "Pre-mix level (L)", startValue: "0"),
+            PlcTag(name: "PremixTotal", dataType: "Real", address: "%MD4", comment: "Total water filled (L)"),
+            PlcTag(name: "PremixTemp", dataType: "Real", address: "%MD8", comment: "Pre-mix temperature (°C)", startValue: "20"),
+            PlcTag(name: "PrepLevel", dataType: "Real", address: "%MD12", comment: "Preparation level (L)", startValue: "0"),
+            PlcTag(name: "PrepTemp", dataType: "Real", address: "%MD16", comment: "Preparation temperature (°C)", startValue: "20"),
+            PlcTag(name: "StorageLevel", dataType: "Real", address: "%MD20", comment: "Storage level (L)", startValue: "0"),
+            PlcTag(name: "Agitator1RPM", dataType: "Real", address: "%MD24", comment: "Agitator 1 speed (RPM)"),
+            PlcTag(name: "Agitator2RPM", dataType: "Real", address: "%MD28", comment: "Agitator 2 speed (RPM)")
+        ]
+        func el(_ k: LadElementKind, _ t: String) -> LadElement { LadElement(kind: k, tag: t) }
+        func gt(_ tag: String, _ v: Double) -> LadElement {
+            var c = LadElement(kind: .cmp, tag: tag); c.op = "GT"; c.useConst = true; c.constValue = v; return c
+        }
+        p.devices[0].blocks[0].networks = [
+            LadNetwork(title: "Fill valve V1301",
+                       series: [el(.contactNO, "FillValve")],
+                       output: el(.coil, "ValveV1301")),
+            LadNetwork(title: "Transfer pump 1 — only while pre-mix holds more than 2 L",
+                       series: [el(.contactNO, "Pump1Cmd"), gt("PremixLevel", 2)],
+                       output: el(.coil, "Pump1")),
+            LadNetwork(title: "Transfer pump 2 — only while preparation holds more than 2 L",
+                       series: [el(.contactNO, "Pump2Cmd"), gt("PrepLevel", 2)],
+                       output: el(.coil, "Pump2")),
+            LadNetwork(title: "Heater 1 — interlock: more than 10 L in the vessel",
+                       series: [el(.contactNO, "Heat1Cmd"), gt("PremixLevel", 10)],
+                       output: el(.coil, "Heater1")),
+            LadNetwork(title: "Heater 2 — interlock: more than 10 L in the vessel",
+                       series: [el(.contactNO, "Heat2Cmd"), gt("PrepLevel", 10)],
+                       output: el(.coil, "Heater2")),
+            LadNetwork(title: "Agitator 1",
+                       series: [el(.contactNO, "Agit1Cmd")],
+                       output: el(.coil, "Agitator1")),
+            LadNetwork(title: "Agitator 2",
+                       series: [el(.contactNO, "Agit2Cmd")],
+                       output: el(.coil, "Agitator2")),
+            LadNetwork(title: "Storage drain valve",
+                       series: [el(.contactNO, "DrainValve")],
+                       output: el(.coil, "DrainOpen"))
+        ]
+        p.watchTags = ["PremixLevel", "PremixTotal", "PremixTemp", "PrepLevel", "StorageLevel"]
+        var screen = HmiScreen(name: "Plant")
+        screen.elements = [
+            HmiElement(kind: .textLabel, text: "MIXING PLANT — PRE-MIX · PREPARATION · STORAGE", x: 24, y: 10, w: 660, h: 34),
+            HmiElement(kind: .button, text: "FILL VALVE", tag: "FillValve", x: 40, y: 48, w: 140, h: 38, action: "toggle"),
+            HmiElement(kind: .button, text: "DRAIN", tag: "DrainValve", x: 620, y: 48, w: 140, h: 38, action: "toggle"),
+            HmiElement(kind: .symbol, text: "PRE-MIX", tag: "PremixLevel", x: 40, y: 96, w: 170, h: 190, symbol: "tank"),
+            HmiElement(kind: .symbol, text: "PREPARATION", tag: "PrepLevel", x: 315, y: 96, w: 170, h: 190, symbol: "tank"),
+            HmiElement(kind: .symbol, text: "STORAGE", tag: "StorageLevel", x: 590, y: 96, w: 170, h: 190, symbol: "tank"),
+            HmiElement(kind: .button, text: "PUMP 1", tag: "Pump1Cmd", x: 222, y: 170, w: 86, h: 40, action: "toggle"),
+            HmiElement(kind: .button, text: "PUMP 2", tag: "Pump2Cmd", x: 492, y: 170, w: 86, h: 40, action: "toggle"),
+            HmiElement(kind: .ioField, text: "Level L", tag: "PremixLevel", x: 40, y: 294, w: 170, h: 46),
+            HmiElement(kind: .ioField, text: "Level L", tag: "PrepLevel", x: 315, y: 294, w: 170, h: 46),
+            HmiElement(kind: .ioField, text: "Level L", tag: "StorageLevel", x: 590, y: 294, w: 170, h: 46),
+            HmiElement(kind: .ioField, text: "Temp °C", tag: "PremixTemp", x: 40, y: 346, w: 170, h: 46),
+            HmiElement(kind: .ioField, text: "Temp °C", tag: "PrepTemp", x: 315, y: 346, w: 170, h: 46),
+            HmiElement(kind: .ioField, text: "Filled L", tag: "PremixTotal", x: 590, y: 346, w: 170, h: 46),
+            HmiElement(kind: .button, text: "HEAT 1", tag: "Heat1Cmd", x: 40, y: 400, w: 110, h: 40, action: "toggle"),
+            HmiElement(kind: .button, text: "AGIT 1", tag: "Agit1Cmd", x: 160, y: 400, w: 110, h: 40, action: "toggle"),
+            HmiElement(kind: .button, text: "HEAT 2", tag: "Heat2Cmd", x: 315, y: 400, w: 110, h: 40, action: "toggle"),
+            HmiElement(kind: .button, text: "AGIT 2", tag: "Agit2Cmd", x: 435, y: 400, w: 110, h: 40, action: "toggle"),
+            HmiElement(kind: .lamp, text: "Pump 1", tag: "Pump1", x: 560, y: 400, w: 90, h: 40),
+            HmiElement(kind: .lamp, text: "Heater 1", tag: "Heater1", x: 660, y: 400, w: 100, h: 40, colorOn: "red")
+        ]
+        var hmi = HmiDevice(screens: [screen])
+        hmi.alarms = [HmiAlarm(name: "Filling", tag: "ValveV1301", text: "Filling the pre-mix vessel", alarmClass: "Warnings")]
+        p.hmi = hmi
+        return p
+    }
 }
 
 // MARK: - Compile diagnostics
