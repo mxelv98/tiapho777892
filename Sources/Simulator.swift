@@ -54,7 +54,20 @@ final class Simulator: ObservableObject {
     }
     private func stopTimer() { timer?.invalidate(); timer = nil }
 
-    func setInput(_ tag: String, _ v: Bool) { values[tag] = v }
+    func setInput(_ tag: String, _ v: Bool) {
+        print("[DEBUG-LOG] PLCSIM setInput \(tag) = \(v)") // DEBUG-LOG (temporary, Part 1 diagnosis)
+        values[tag] = v
+    }
+
+    /// HMI write entry point. Part 1 diagnosis: currently forwards to the
+    /// same shared values slot as PLCSIM — no separate layer, no freeze.
+    func setHMIInput(_ tag: String, _ v: Bool) {
+        print("[DEBUG-LOG] HMI setHMIInput \(tag) = \(v)") // DEBUG-LOG (temporary, Part 1 diagnosis)
+        values[tag] = v
+    }
+
+    /// One synchronous scan, for tests and single-stepping.
+    func scanOnce() { scan() }
 
     func counterPV(_ instance: String) -> Int { counterPV[instance] ?? 0 }
 
@@ -62,6 +75,9 @@ final class Simulator: ObservableObject {
 
     private func scan() {
         guard let d = device, let main = d.blocks.first(where: { $0.type == "OB" }) else { return }
+        // DEBUG-LOG (temporary, Part 1 diagnosis): what the scan actually samples
+        let sampled = d.tags.filter { $0.address.hasPrefix("%I") }.map { "\($0.name)=\(values[$0.name] ?? false)" }.joined(separator: " ")
+        print("[DEBUG-LOG] scan samples inputs: \(sampled)")
         let dt = 0.1
         for net in main.networks {
             var power = true

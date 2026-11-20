@@ -333,7 +333,7 @@ struct HmiElementFace: View {
                     Text(el.text).font(.system(size: 15, weight: .bold)).foregroundColor(Tia.textDark)
                 }
                 .modifier(RuntimeButtonModifier(enabled: interactive && !el.tag.isEmpty) { v in
-                    sim.setInput(el.tag, v)
+                    sim.setHMIInput(el.tag, v)
                 })
             case .lamp:
                 VStack(spacing: 3) {
@@ -357,7 +357,7 @@ struct HmiElementFace: View {
                 .overlay(RoundedRectangle(cornerRadius: 3).stroke(Tia.border, lineWidth: 1))
                 .onTapGesture {
                     if interactive, sim.values[el.tag] != nil {
-                        sim.setInput(el.tag, !on)
+                        sim.setHMIInput(el.tag, !on)
                     }
                 }
             case .textLabel:
