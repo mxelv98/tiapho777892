@@ -1,9 +1,11 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Portal view — v5.1: adaptive. Landscape keeps the two-pane layout from
-/// the mockups; portrait stacks (compact task card on top, projects as
-/// full-width rows) so nothing is squeezed or clipped. Store logic unchanged.
+/// Portal view — v5.2: PHONE-NATIVE home, designed for the phone only
+/// (his order: no shrunken desktop Portal). Portrait-first, one-handed,
+/// 44pt targets, big type; landscape simply widens the same layout.
+/// The project workspace keeps the TIA training identity — this home is
+/// just the front door. Store logic unchanged.
 struct PortalView: View {
     @EnvironmentObject var store: ProjectStore
     @State private var showCreate = false
@@ -11,35 +13,55 @@ struct PortalView: View {
     @State private var selected: String? = "open"
     @State private var showImporter = false
     @State private var importNote = ""
+    @State private var appeared = false
 
     var body: some View {
         GeometryReader { geo in
-            let landscape = geo.size.width > geo.size.height
-            VStack(spacing: 0) {
-                header(landscape: landscape)
-                if landscape {
-                    HStack(spacing: 10) {
-                        tasksCard.frame(width: 210, alignment: .leading)
-                        content(landscape: true)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .padding(10)
-                } else {
-                    ScrollView {
-                        VStack(spacing: 10) {
-                            tasksCard
-                            content(landscape: false)
+            let wide = geo.size.width > 560
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    brandHeader
+                    if selected == "create" {
+                        createCard
+                    } else if selected == "steps" {
+                        infoCard(title: "First steps", lines: stepsLines, footnote: "Open the SortingStation demo project to see a complete example.")
+                    } else if selected == "about" {
+                        infoCard(title: "Installed software", lines: ["Tia Phone — a training replica of the TIA Portal V16 interface.", "It does not connect to real PLCs and does not replace TIA Portal."], footnote: nil)
+                    } else {
+                        actionsRow
+                        recentHeader
+                        if !importNote.isEmpty {
+                            Text(importNote).font(.system(size: 12.5)).foregroundColor(Tia.accent)
                         }
-                        .padding(10)
+                        if store.recents.isEmpty {
+                            Text("No projects yet — create your first one above.")
+                                .font(.system(size: 13)).foregroundColor(.secondary)
+                                .padding(.vertical, 8)
+                        } else if wide {
+                            LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
+                                ForEach(Array(store.recents.enumerated()), id: \.element) { i, name in
+                                    projectRow(name).entrance(i, appeared)
+                                }
+                            }
+                        } else {
+                            VStack(spacing: 12) {
+                                ForEach(Array(store.recents.enumerated()), id: \.element) { i, name in
+                                    projectRow(name).entrance(i, appeared)
+                                }
+                            }
+                        }
+                        learnRow
                     }
                 }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .background(Tia.pane)
         }
-        .sheet(isPresented: $showCreate) { EmptyView() }
+        .onAppear { withAnimation(.spring(response: 0.55, dampingFraction: 0.85).delay(0.05)) { appeared = true } }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.json]) { result in
             if case .success(let url) = result, let name = store.importProject(from: url) {
-                importNote = "Imported \(name) — tap Open to start it."
+                importNote = "Imported \(name) — tap it to open."
                 selected = "open"
             } else {
                 importNote = "That file is not a Tia Phone project."
@@ -47,157 +69,177 @@ struct PortalView: View {
         }
     }
 
-    private func header(landscape: Bool) -> some View {
-        HStack(spacing: 10) {
-            Wordmark(large: landscape)
-            Spacer()
-            Button { showImporter = true } label: {
-                Label("Import file", systemImage: "square.and.arrow.down")
-                    .font(.system(size: 12.5, weight: .semibold))
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 12).padding(.vertical, 7)
-                    .background(Tia.accent)
-                    .clipShape(Capsule())
-            }
-            .buttonStyle(.plain)
-            if landscape {
-                Text("Portal view").font(.system(size: 12)).foregroundColor(.secondary)
-            }
-        }
-        .padding(landscape ? 14 : 10)
-        .background(Tia.paneHeader)
-    }
-
-    private var tasksCard: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text("Start").font(.system(size: 12, weight: .semibold)).padding(.bottom, 4)
-            portalTask("Create new project", "plus.square", "create")
-            portalTask("Open existing project", "folder", "open")
-            portalTask("Migrate project", "arrow.triangle.2.circlepath", "migrate")
-            portalTask("Close portal", "xmark.square", "close")
-            Divider().padding(.vertical, 6)
-            Text("Learn").font(.system(size: 12, weight: .semibold)).padding(.bottom, 4)
-            portalTask("First steps", "list.number", "steps")
-            portalTask("Installed software", "info.circle", "about")
-        }
-        .padding(10)
-        .tiaCard()
-    }
-
-    private func content(landscape: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if selected == "create" {
-                Text("Create new project").font(.system(size: 15, weight: .semibold))
-                HStack {
-                    Text("Name:").frame(width: 60, alignment: .leading)
-                    TextField("Project name", text: $newName).textFieldStyle(.roundedBorder).frame(maxWidth: 280)
-                }
-                HStack {
-                    Text("Path:").frame(width: 60, alignment: .leading)
-                    Text("Documents/Projects").foregroundColor(.secondary)
-                }
-                HStack {
-                    Button("Create") {
-                        let n = newName.trimmingCharacters(in: .whitespaces)
-                        if !n.isEmpty { store.create(name: n) }
-                    }.disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty)
-                    Button("Cancel") { selected = "open" }
-                }
-                Text("A new project is created with one device: PLC_1 (CPU 1214C DC/DC/DC) and an empty Main (OB1).")
-                    .font(.system(size: 11)).foregroundColor(.secondary)
-            } else if selected == "steps" {
-                Text("First steps").font(.system(size: 15, weight: .semibold))
-                ForEach(["Rotate your phone to landscape — the project view is laid out like the PC, and portrait keeps the tree and task cards behind the Tree / Tasks buttons",
-                         "1  Create a project and add the CPU from the catalog",
-                         "2  Declare your inputs and outputs in the tag table",
-                         "3  Program Main (OB1) in the LAD editor",
-                         "4  Compile and read the diagnostics in the inspector window",
-                         "5  Start PLCSIM, download, switch to RUN and test with the inputs"], id: \.self) {
-                    Text($0).font(.system(size: 12.5))
-                }
-                Text("Open the SortingStation demo project to see a complete example.")
-                    .font(.system(size: 11)).foregroundColor(.secondary)
-            } else if selected == "about" {
-                Text("Installed software").font(.system(size: 15, weight: .semibold))
-                Text("Tia Phone — a training replica of the TIA Portal V16 interface.\nIt does not connect to real PLCs and does not replace TIA Portal.")
-                    .font(.system(size: 12.5))
-            } else {
-                HStack {
-                    Text("Recent projects").font(.system(size: 15, weight: .semibold))
-                    Spacer()
-                    Text("\(store.recents.count) projects").font(.system(size: 11.5)).foregroundColor(.secondary)
-                }
-                if !importNote.isEmpty {
-                    Text(importNote).font(.system(size: 11.5)).foregroundColor(Tia.accent)
-                }
-                if store.recents.isEmpty {
-                    Text("No projects yet.").foregroundColor(.secondary)
-                }
-                if landscape {
-                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
-                        ForEach(store.recents, id: \.self) { name in
-                            projectCard(name)
-                        }
-                    }
-                } else {
-                    VStack(spacing: 10) {
-                        ForEach(store.recents, id: \.self) { name in
-                            projectCard(name)
-                        }
-                    }
-                }
-            }
-            if landscape { Spacer() }
-        }
-        .padding(landscape ? 12 : 2)
-    }
-
-    private func projectCard(_ name: String) -> some View {
-        HStack(spacing: 10) {
-            RoundedRectangle(cornerRadius: 10)
-                .fill(Tia.selection)
-                .frame(width: 42, height: 42)
-                .overlay(Image(systemName: "doc.richtext").font(.system(size: 19)).foregroundColor(Tia.accent))
+    private var brandHeader: some View {
+        HStack(spacing: 12) {
+            LogoMark(size: 52)
             VStack(alignment: .leading, spacing: 1) {
-                Text(name).font(.system(size: 13.5, weight: .semibold)).lineLimit(1)
-                Text("Documents/Projects").font(.system(size: 10)).foregroundColor(.secondary)
+                Text("Tia Phone").font(.system(size: 26, weight: .bold)).foregroundColor(Tia.textDark)
+                Text("PLC training, in your pocket").font(.system(size: 13)).foregroundColor(.secondary)
+            }
+            Spacer()
+        }
+        .padding(.top, 6)
+    }
+
+    private var actionsRow: some View {
+        VStack(spacing: 12) {
+            Button { selected = "create" } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "plus.circle.fill").font(.system(size: 20))
+                    Text("New project").font(.system(size: 16, weight: .semibold))
+                    Spacer()
+                    Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).opacity(0.7)
+                }
+                .foregroundColor(.white)
+                .padding(.horizontal, 16)
+                .frame(height: 54)
+                .background(Tia.accent)
+                .clipShape(RoundedRectangle(cornerRadius: 16))
+                .shadow(color: Tia.accent.opacity(0.35), radius: 8, y: 3)
+            }
+            .buttonStyle(PressableButtonStyle())
+            Button { showImporter = true } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "square.and.arrow.down").font(.system(size: 17)).foregroundColor(Tia.accent)
+                    Text("Import a project file").font(.system(size: 15, weight: .medium)).foregroundColor(Tia.textDark)
+                    Spacer()
+                    Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold)).foregroundColor(.secondary)
+                }
+                .padding(.horizontal, 16)
+                .frame(height: 50)
+                .tiaCard(radius: 16)
+            }
+            .buttonStyle(PressableButtonStyle())
+        }
+    }
+
+    private var recentHeader: some View {
+        HStack {
+            Text("Recent projects").font(.system(size: 18, weight: .bold)).foregroundColor(Tia.textDark)
+            Spacer()
+            Text("\(store.recents.count)").font(.system(size: 13)).foregroundColor(.secondary)
+        }
+        .padding(.top, 4)
+    }
+
+    private var learnRow: some View {
+        HStack(spacing: 12) {
+            Button { selected = "steps" } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "list.number").foregroundColor(Tia.accent)
+                    Text("First steps").font(.system(size: 14, weight: .medium)).foregroundColor(Tia.textDark)
+                }
+                .frame(maxWidth: .infinity).frame(height: 46)
+                .tiaCard(radius: 14)
+            }
+            .buttonStyle(PressableButtonStyle())
+            Button { selected = "about" } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "info.circle").foregroundColor(Tia.accent)
+                    Text("About").font(.system(size: 14, weight: .medium)).foregroundColor(Tia.textDark)
+                }
+                .frame(maxWidth: .infinity).frame(height: 46)
+                .tiaCard(radius: 14)
+            }
+            .buttonStyle(PressableButtonStyle())
+        }
+        .padding(.top, 2)
+    }
+
+    private func projectRow(_ name: String) -> some View {
+        HStack(spacing: 12) {
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Tia.selection)
+                .frame(width: 48, height: 48)
+                .overlay(Image(systemName: "doc.richtext").font(.system(size: 21)).foregroundColor(Tia.accent))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(name).font(.system(size: 15.5, weight: .semibold)).foregroundColor(Tia.textDark).lineLimit(1)
+                Text("Tap to open").font(.system(size: 12)).foregroundColor(.secondary)
             }
             Spacer(minLength: 4)
-            Button { store.open(name: name) } label: {
-                Text("Open").font(.system(size: 12, weight: .semibold)).foregroundColor(.white)
-                    .padding(.horizontal, 14).padding(.vertical, 6)
-                    .background(Tia.accent).clipShape(Capsule())
-            }
-            .buttonStyle(.plain)
-            .fixedSize()
             if let p = store.loadProject(name: name), let url = store.exportURL(p) {
-                ShareLink(item: url) { Image(systemName: "square.and.arrow.up").font(.system(size: 14)) }
+                ShareLink(item: url) { Image(systemName: "square.and.arrow.up").font(.system(size: 16)) }
                     .foregroundColor(Tia.accent)
+                    .frame(width: 36, height: 36)
             }
             Button(role: .destructive) { store.delete(name: name) } label: {
-                Image(systemName: "trash").font(.system(size: 14))
+                Image(systemName: "trash").font(.system(size: 16))
             }
             .buttonStyle(.plain)
+            .frame(width: 36, height: 36)
+            Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold)).foregroundColor(.secondary)
         }
-        .padding(10)
-        .tiaCard()
+        .padding(12)
+        .tiaCard(radius: 16)
+        .contentShape(Rectangle())
+        .onTapGesture { store.open(name: name) }
     }
 
-    private func portalTask(_ title: String, _ icon: String, _ key: String) -> some View {
-        Button {
-            selected = key
-            if key == "close" { selected = "open" }
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: icon).frame(width: 18).foregroundColor(Tia.accent)
-                Text(title).font(.system(size: 12.5))
-                Spacer()
+    private var createCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Create new project").font(.system(size: 18, weight: .bold))
+            TextField("Project name", text: $newName)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 16))
+            Text("Created with one device: PLC_1 (CPU 1214C DC/DC/DC) and an empty Main (OB1). Saved in Documents/Projects.")
+                .font(.system(size: 12)).foregroundColor(.secondary)
+            HStack(spacing: 10) {
+                Button {
+                    let n = newName.trimmingCharacters(in: .whitespaces)
+                    if !n.isEmpty { store.create(name: n) }
+                } label: {
+                    Text("Create").font(.system(size: 15, weight: .semibold)).foregroundColor(.white)
+                        .frame(maxWidth: .infinity).frame(height: 46)
+                        .background(Tia.accent).clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+                .buttonStyle(PressableButtonStyle())
+                .disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty)
+                Button { selected = "open" } label: {
+                    Text("Cancel").font(.system(size: 15, weight: .medium)).foregroundColor(Tia.textDark)
+                        .frame(maxWidth: .infinity).frame(height: 46)
+                        .tiaCard(radius: 12)
+                }
+                .buttonStyle(PressableButtonStyle())
             }
-            .padding(.vertical, 6).padding(.horizontal, 8)
-            .background(selected == key ? Tia.selection : Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .padding(14)
+        .tiaCard(radius: 16)
+    }
+
+    private func infoCard(title: String, lines: [String], footnote: String?) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(title).font(.system(size: 18, weight: .bold))
+                Spacer()
+                Button { selected = "open" } label: {
+                    Image(systemName: "xmark.circle.fill").font(.system(size: 20)).foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+            ForEach(lines, id: \.self) { Text($0).font(.system(size: 14)) }
+            if let footnote {
+                Text(footnote).font(.system(size: 12)).foregroundColor(.secondary)
+            }
+        }
+        .padding(14)
+        .tiaCard(radius: 16)
+    }
+
+    private var stepsLines: [String] {
+        ["Inside a project, rotate your phone to landscape — the workspace is laid out like the PC.",
+         "1  Create a project and add the CPU from the catalog",
+         "2  Declare your inputs and outputs in the tag table",
+         "3  Program Main (OB1) in the LAD editor",
+         "4  Compile and read the diagnostics in the inspector window",
+         "5  Start PLCSIM, download, switch to RUN and test with the inputs"]
+    }
+}
+
+extension View {
+    /// Staggered entrance for list cards (Portal home).
+    func entrance(_ index: Int, _ on: Bool) -> some View {
+        opacity(on ? 1 : 0)
+            .offset(y: on ? 0 : 14)
+            .animation(.spring(response: 0.5, dampingFraction: 0.85).delay(Double(index) * 0.06), value: on)
     }
 }

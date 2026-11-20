@@ -638,10 +638,7 @@ struct LadEditorView: View {
             }
             .padding(4)
         }
-        .background(Color.white)
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Tia.border.opacity(0.5), lineWidth: 0.7))
-        .clipShape(RoundedRectangle(cornerRadius: 14))
-        .shadow(color: .black.opacity(0.13), radius: 5, y: 2)
+        .glassBar(radius: 14)
     }
 
     private func stripButton(_ label: String, _ icon: String, action: @escaping () -> Void) -> some View {

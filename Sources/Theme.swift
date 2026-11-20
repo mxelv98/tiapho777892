@@ -199,8 +199,7 @@ struct ZoomHUD: View {
 
 /// The always-visible 24pt near-black status bar (#1A1D21) from the
 /// wireframes: Portal shortcut left, project + CPU state right.
-struct StatusBarV3: View {
-    let projectName: String
+struct StatusBarV3: View {    let projectName: String
     let running: Bool
     let powered: Bool
     let online: Bool
@@ -222,8 +221,12 @@ struct StatusBarV3: View {
                 Text("ONLINE").font(.system(size: 10, weight: .bold)).foregroundColor(Tia.online)
                 Text("|").foregroundColor(.white.opacity(0.35)).font(.system(size: 10))
             }
-            Circle().fill(powered ? (running ? Tia.runGreen : Color.orange) : Color.gray)
-                .frame(width: 8, height: 8)
+            if powered && running {
+                PulsingDot(color: Tia.runGreen)
+            } else {
+                Circle().fill(powered ? Color.orange : Color.gray)
+                    .frame(width: 8, height: 8)
+            }
             Text(powered ? (running ? "RUN" : "STOP") : "—")
                 .font(.system(size: 10.5, weight: .semibold)).foregroundColor(.white)
             Text("100ms").font(.system(size: 10.5)).foregroundColor(.white.opacity(0.75))
@@ -233,5 +236,46 @@ struct StatusBarV3: View {
         .padding(.horizontal, 8)
         .frame(height: 24)
         .background(Tia.statusBarV3)
+    }
+}
+
+// MARK: - v5.2 Apple motion kit
+
+/// Apple-style press feedback: the control settles down a touch while
+/// pressed, springing back on release. For primary buttons and cards.
+struct PressableButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .opacity(configuration.isPressed ? 0.85 : 1)
+            .animation(.spring(response: 0.28, dampingFraction: 0.7), value: configuration.isPressed)
+    }
+}
+
+/// A live-status dot that breathes while active (RUN). Honours Reduce Motion.
+struct PulsingDot: View {
+    var color: Color = Tia.runGreen
+    var active: Bool = true
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var on = false
+    var body: some View {
+        Circle().fill(color)
+            .frame(width: 8, height: 8)
+            .opacity(active && !reduceMotion ? (on ? 0.45 : 1) : 1)
+            .onAppear {
+                guard active && !reduceMotion else { return }
+                withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { on = true }
+            }
+    }
+}
+
+extension View {
+    /// Floating functional layer in the Apple material style (frosted),
+    /// for bars that hover over content — never for content itself.
+    func glassBar(radius: CGFloat = 14) -> some View {
+        background(.ultraThinMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: radius))
+            .overlay(RoundedRectangle(cornerRadius: radius).stroke(Color.white.opacity(0.35), lineWidth: 0.6))
+            .shadow(color: .black.opacity(0.13), radius: 6, y: 2)
     }
 }
