@@ -384,7 +384,7 @@ struct LadEditorView: View {
 
     private func boxCellContent(_ el: LadElement, wdt: CGFloat, cy: CGFloat) -> some View {
         let bw = wdt - 8
-        let bh: CGFloat = isCounter(el.kind) ? 53 : 40
+        let bh: CGFloat = 53
         return ZStack(alignment: .topLeading) {
             Text(el.instance.isEmpty ? "???" : el.instance)
                 .font(.system(size: 9.5 * z)).foregroundColor(.secondary)
@@ -420,6 +420,17 @@ struct LadEditorView: View {
             }
             .padding(.horizontal, 4 * z)
             .frame(height: 13 * z)
+            if isTimer(el.kind) {
+                HStack {
+                    Text("ET").font(.system(size: 9.5 * z)).foregroundColor(Tia.textDark)
+                    Spacer()
+                    Text(String(format: "%.1fs", sim.timerET[el.instance] ?? 0))
+                        .font(.system(size: 9.5 * z, weight: .semibold, design: .monospaced))
+                        .foregroundColor(live ? Tia.onlineTrue : Tia.textDark)
+                }
+                .padding(.horizontal, 4 * z)
+                .frame(height: 13 * z)
+            }
             if isCounter(el.kind) {
                 HStack {
                     Text("CV").font(.system(size: 9.5 * z)).foregroundColor(Tia.textDark)

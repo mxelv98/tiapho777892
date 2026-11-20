@@ -90,6 +90,7 @@ struct PlcDevice: Identifiable, Codable {
 
 enum HmiElementKind: String, Codable, CaseIterable {
     case button, lamp, ioField, textLabel, bar
+    case gauge, slider, toggleSwitch, symbol   // Studio additions (v3.3)
 }
 
 struct HmiElement: Identifiable, Codable, Equatable {
@@ -102,6 +103,29 @@ struct HmiElement: Identifiable, Codable, Equatable {
     var w: Double = 96
     var h: Double = 40
     var colorOn: String = "green" // lamp on-colour name
+    // Studio additions (v3.3) — decoded with decodeIfPresent so screens
+    // saved by older versions still open.
+    var symbol: String = ""       // symbol name (kind .symbol) or target screen (button action "navigate")
+    var action: String = "momentary" // button: momentary / toggle / set / reset / navigate
+    var fontSize: Double = 15
+}
+
+extension HmiElement {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        kind = try c.decodeIfPresent(HmiElementKind.self, forKey: .kind) ?? .button
+        text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
+        tag = try c.decodeIfPresent(String.self, forKey: .tag) ?? ""
+        x = try c.decodeIfPresent(Double.self, forKey: .x) ?? 20
+        y = try c.decodeIfPresent(Double.self, forKey: .y) ?? 20
+        w = try c.decodeIfPresent(Double.self, forKey: .w) ?? 96
+        h = try c.decodeIfPresent(Double.self, forKey: .h) ?? 40
+        colorOn = try c.decodeIfPresent(String.self, forKey: .colorOn) ?? "green"
+        symbol = try c.decodeIfPresent(String.self, forKey: .symbol) ?? ""
+        action = try c.decodeIfPresent(String.self, forKey: .action) ?? "momentary"
+        fontSize = try c.decodeIfPresent(Double.self, forKey: .fontSize) ?? 15
+    }
 }
 
 struct HmiScreen: Identifiable, Codable, Equatable {
@@ -115,6 +139,18 @@ struct HmiDevice: Identifiable, Codable, Equatable {
     var name: String = "HMI_1"
     var panel: String = "KTP700 Basic PN"
     var screens: [HmiScreen] = [HmiScreen()]
+    var startScreen: Int = 0      // Studio addition (v3.3)
+}
+
+extension HmiDevice {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? "HMI_1"
+        panel = try c.decodeIfPresent(String.self, forKey: .panel) ?? "KTP700 Basic PN"
+        screens = try c.decodeIfPresent([HmiScreen].self, forKey: .screens) ?? [HmiScreen()]
+        startScreen = try c.decodeIfPresent(Int.self, forKey: .startScreen) ?? 0
+    }
 }
 
 // MARK: - Project
@@ -239,7 +275,8 @@ struct TiaProject: Identifiable, Codable {
             HmiElement(kind: .button, text: "ON", tag: "BtnOn", x: 24, y: 110, w: 220, h: 110),
             HmiElement(kind: .button, text: "OFF", tag: "BtnOff", x: 280, y: 110, w: 220, h: 110),
             HmiElement(kind: .lamp, text: "Motor", tag: "Motor", x: 536, y: 110, w: 180, h: 110),
-            HmiElement(kind: .textLabel, text: "ON latches (S) — OFF unlatches (R)", x: 24, y: 260, w: 560, h: 36)
+            HmiElement(kind: .symbol, text: "Motor", tag: "Motor", x: 280, y: 250, w: 170, h: 140, symbol: "motor"),
+            HmiElement(kind: .textLabel, text: "ON latches (S) — OFF unlatches (R)", x: 24, y: 260, w: 240, h: 36)
         ]
         p.hmi = HmiDevice(screens: [screen])
         return p

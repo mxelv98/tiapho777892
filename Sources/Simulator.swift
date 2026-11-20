@@ -10,6 +10,7 @@ import Foundation
 final class Simulator: ObservableObject {
     @Published var values: [String: Bool] = [:]
     @Published var counts: [String: Int] = [:]
+    @Published var timerET: [String: Double] = [:]   // elapsed time per timer instance (Part 3 live values)
     @Published var powered = false
     @Published var running = false
 
@@ -39,7 +40,7 @@ final class Simulator: ObservableObject {
     }
 
     func reset() {
-        values = [:]; counts = [:]
+        values = [:]; counts = [:]; timerET = [:]
         tonElapsed = [:]; timerQ = [:]; timerLastIN = [:]; tpActive = [:]
         ctuCV = [:]; ctuLastCU = [:]; counterKind = [:]; counterPV = [:]; edgePrev = [:]
         physBits = [:]; hmiBits = [:]; hmiPulse = []; hmiSeen = []; inputImage = [:]
@@ -96,6 +97,13 @@ final class Simulator: ObservableObject {
     func scanOnce() { scan() }
 
     func counterPV(_ instance: String) -> Int { counterPV[instance] ?? 0 }
+
+    /// HMI slider write: set a counter's current value directly.
+    func setCounterValue(_ instance: String, _ v: Int) {
+        let val = max(0, v)
+        ctuCV[instance] = val
+        counts[instance] = val
+    }
 
     private func isTimer(_ k: LadElementKind) -> Bool { k == .ton || k == .tof || k == .tp }
 
@@ -187,6 +195,7 @@ final class Simulator: ObservableObject {
         default: break
         }
         timerQ[el.instance] = q
+        timerET[el.instance] = tonElapsed[el.instance] ?? 0
         if !el.tag.isEmpty { values[el.tag] = q }
         if el.kind == .ton && wasQ && !q {
             for s in net.series where s.kind == .ctu { ctuCV[s.instance] = 0 }
