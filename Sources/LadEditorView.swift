@@ -645,18 +645,22 @@ struct LadGlyph: View {
     var colorIn: Color
     var colorOut: Color
     var scale: CGFloat = 1
+
+    private func stubEnds(_ w: CGFloat) -> (CGFloat, CGFloat) {
+        switch kind {
+        case .coil, .coilSet, .coilReset: return (w * 0.25, w * 0.75)
+        case .notOp: return (w * 0.19, w * 0.81)
+        default: return (w * 0.36, w * 0.64)
+        }
+    }
+
     var body: some View {
         GeometryReader { g in
             let w = g.size.width, h = g.size.height, mid = h / 2
             let lw: CGFloat = 1.8 * scale
             // Stub ends: the wire runs from each cell edge to the symbol
             // edge exactly — the symbol never bridges its own gap.
-            let a: CGFloat, b: CGFloat
-            switch kind {
-            case .coil, .coilSet, .coilReset: a = w * 0.25; b = w * 0.75
-            case .notOp: a = w * 0.19; b = w * 0.81
-            default: a = w * 0.36; b = w * 0.64
-            }
+            let (a, b) = stubEnds(w)
             ZStack {
                 Path { p in
                     p.move(to: CGPoint(x: 0, y: mid)); p.addLine(to: CGPoint(x: a, y: mid))
