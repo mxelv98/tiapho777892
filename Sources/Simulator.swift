@@ -308,9 +308,13 @@ final class Simulator: ObservableObject {
             case .sr, .rs:
                 applySR(el, sPower: power)
             case .math, .move:
+                // Data boxes pass the rung power through (ENO follows EN);
+                // they must never gate the rung on their operand's bit.
                 if power { execMath(el) }
+                continue
             case .pid:
                 if power { applyPID(el, dt: dt) }
+                continue
             default:
                 break
             }
