@@ -173,9 +173,10 @@ final class TiaPhoneV4Tests: XCTestCase {
         let d = device(tags: [
             PlcTag(name: "Up", dataType: "Bool", address: "%I0.0"),
             PlcTag(name: "Down", dataType: "Bool", address: "%I0.1"),
-            PlcTag(name: "Full", dataType: "Bool", address: "%Q0.0")
+            PlcTag(name: "Full", dataType: "Bool", address: "%Q0.0"),
+            PlcTag(name: "Counted", dataType: "Bool", address: "%Q0.1")
         ], networks: [
-            LadNetwork(title: "ctud", series: [el(.contactNO, "Up"), ctud], output: el(.coil, "Full"))
+            LadNetwork(title: "ctud", series: [el(.contactNO, "Up"), ctud], output: el(.coil, "Counted"))
         ])
         let sim = Simulator(); sim.attach(d)
         for _ in 0..<3 {
