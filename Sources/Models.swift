@@ -211,6 +211,39 @@ struct TiaProject: Identifiable, Codable {
         p.hmi = HmiDevice(screens: [screen])
         return p
     }
+
+    /// The simplest starter project: a motor latched ON with a Set coil
+    /// and latched OFF with a Reset coil, plus one small HMI screen.
+    static func motorProject() -> TiaProject {
+        var p = newProject(name: "MotorOnOff")
+        p.devices[0].tags = [
+            PlcTag(name: "BtnOn", dataType: "Bool", address: "%I0.0", comment: "ON button — latch"),
+            PlcTag(name: "BtnOff", dataType: "Bool", address: "%I0.1", comment: "OFF button — unlatch"),
+            PlcTag(name: "Motor", dataType: "Bool", address: "%Q0.0", comment: "Motor contactor")
+        ]
+        func el(_ k: LadElementKind, _ t: String) -> LadElement { LadElement(kind: k, tag: t) }
+        p.devices[0].blocks[0].networks = [
+            LadNetwork(title: "Latch ON — set the motor",
+                       comment: "One press on ON: the (S) coil latches the motor on.",
+                       series: [el(.contactNO, "BtnOn")],
+                       output: el(.coilSet, "Motor")),
+            LadNetwork(title: "Latch OFF — reset the motor",
+                       comment: "One press on OFF: the (R) coil unlatches the motor.",
+                       series: [el(.contactNO, "BtnOff")],
+                       output: el(.coilReset, "Motor"))
+        ]
+        p.watchTags = ["BtnOn", "BtnOff", "Motor"]
+        var screen = HmiScreen(name: "Screen_1")
+        screen.elements = [
+            HmiElement(kind: .textLabel, text: "Motor Control", x: 24, y: 16, w: 420, h: 44),
+            HmiElement(kind: .button, text: "ON", tag: "BtnOn", x: 24, y: 110, w: 220, h: 110),
+            HmiElement(kind: .button, text: "OFF", tag: "BtnOff", x: 280, y: 110, w: 220, h: 110),
+            HmiElement(kind: .lamp, text: "Motor", tag: "Motor", x: 536, y: 110, w: 180, h: 110),
+            HmiElement(kind: .textLabel, text: "ON latches (S) — OFF unlatches (R)", x: 24, y: 260, w: 560, h: 36)
+        ]
+        p.hmi = HmiDevice(screens: [screen])
+        return p
+    }
 }
 
 // MARK: - Compile diagnostics

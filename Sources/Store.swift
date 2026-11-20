@@ -14,6 +14,8 @@ final class ProjectStore: ObservableObject {
         recents = UserDefaults.standard.stringArray(forKey: recentsKey) ?? []
         if !fileExists("SortingStation") { save(TiaProject.demoProject()) }
         if !recents.contains("SortingStation") { recents.insert("SortingStation", at: 0); persistRecents() }
+        if !fileExists("MotorOnOff") { save(TiaProject.motorProject()) }
+        if !recents.contains("MotorOnOff") { recents.append("MotorOnOff"); persistRecents() }
     }
 
     private func fileURL(_ name: String) -> URL { dir.appendingPathComponent(name + ".tiaphone.json") }
