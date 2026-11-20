@@ -29,6 +29,14 @@ enum Tia {
     static let boxHeader = Color(red: 0.85, green: 0.87, blue: 0.90)
     static let tealText = Color(red: 0.0, green: 0.45, blue: 0.55)
     static let wire = Color(red: 0.15, green: 0.15, blue: 0.16)
+    // v3 wireframe tokens (from the approved design sheets)
+    static let statusBarV3 = Color(red: 0.102, green: 0.114, blue: 0.129)  // #1A1D21
+    static let labelTeal = Color(red: 0.0, green: 0.482, blue: 0.541)      // #007B8A operand address
+    static let nameGrey = Color(red: 0.106, green: 0.133, blue: 0.157)     // #1B2228 operand name
+    static let boxFillV3 = Color(red: 0.937, green: 0.937, blue: 0.937)    // #EFEFEF timer/counter box
+    static let onlineTrue = Color(red: 0.118, green: 0.620, blue: 0.290)   // #1E9E4A live wire TRUE
+    static let onlineFalse = Color(red: 0.227, green: 0.482, blue: 0.835)  // #3A7BD5 live wire FALSE
+    static let railWidth: CGFloat = 28
 }
 
 struct PaneHeader: View {
@@ -119,5 +127,100 @@ struct Wordmark: View {
                     .font(.system(size: large ? 10 : 8.5)).foregroundColor(.secondary)
             }
         }
+    }
+}
+
+// MARK: - v3 shared chrome (from the approved wireframes)
+
+/// A collapsed side pane: a 28pt vertical rail with the pane title written
+/// vertically, exactly like V16. Tapping it reopens the pane.
+struct CollapsedRail: View {
+    let title: String
+    var action: () -> Void = {}
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 6) {
+                Image(systemName: "chevron.right").font(.system(size: 9, weight: .bold))
+                Text(title).font(.system(size: 10, weight: .semibold))
+                    .fixedSize()
+                    .rotationEffect(.degrees(-90))
+                    .frame(width: 12, height: 130)
+            }
+            .foregroundColor(Tia.textDark)
+            .frame(width: Tia.railWidth)
+            .frame(maxHeight: .infinity)
+            .background(Tia.paneHeader)
+            .overlay(Rectangle().frame(width: 0.7).foregroundColor(Tia.border), alignment: .trailing)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// The zoom control from the wireframes: [ − ] [ 100% ] [ + ] [ Fit ].
+/// Shared by the LAD editor, the rack view and the HMI canvas.
+struct ZoomHUD: View {
+    @Binding var zoom: CGFloat
+    var onFit: () -> Void = {}
+    var body: some View {
+        HStack(spacing: 0) {
+            Button { zoom = max(0.5, zoom - 0.1) } label: {
+                Image(systemName: "minus").frame(width: 30, height: 24)
+            }
+            Text("\(Int((zoom * 100).rounded()))%")
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .frame(width: 48)
+            Button { zoom = min(2.0, zoom + 0.1) } label: {
+                Image(systemName: "plus").frame(width: 30, height: 24)
+            }
+            Divider().frame(height: 16)
+            Button(action: onFit) {
+                Image(systemName: "arrow.up.left.and.arrow.down.right").frame(width: 30, height: 24)
+            }
+        }
+        .foregroundColor(Tia.textDark)
+        .background(Color.white)
+        .overlay(RoundedRectangle(cornerRadius: 4).stroke(Tia.border, lineWidth: 0.8))
+        .clipShape(RoundedRectangle(cornerRadius: 4))
+        .shadow(color: .black.opacity(0.12), radius: 2, y: 1)
+    }
+}
+
+/// The always-visible 24pt near-black status bar (#1A1D21) from the
+/// wireframes: Portal shortcut left, project + CPU state right.
+struct StatusBarV3: View {
+    let projectName: String
+    let running: Bool
+    let powered: Bool
+    let online: Bool
+    var onPortal: () -> Void = {}
+    var body: some View {
+        HStack(spacing: 10) {
+            Button(action: onPortal) {
+                HStack(spacing: 4) {
+                    Image(systemName: "square.grid.2x2").font(.system(size: 10))
+                    Text("Portal view").font(.system(size: 10.5, weight: .semibold))
+                }
+                .foregroundColor(.white)
+            }
+            .buttonStyle(.plain)
+            Text("|").foregroundColor(.white.opacity(0.35)).font(.system(size: 10))
+            Text(projectName).font(.system(size: 10.5)).foregroundColor(.white)
+            Spacer()
+            if online {
+                Text("ONLINE").font(.system(size: 10, weight: .bold)).foregroundColor(Tia.online)
+                Text("|").foregroundColor(.white.opacity(0.35)).font(.system(size: 10))
+            }
+            Circle().fill(powered ? (running ? Tia.runGreen : Color.orange) : Color.gray)
+                .frame(width: 8, height: 8)
+            Text(powered ? (running ? "RUN" : "STOP") : "—")
+                .font(.system(size: 10.5, weight: .semibold)).foregroundColor(.white)
+            Text("100ms").font(.system(size: 10.5)).foregroundColor(.white.opacity(0.75))
+            Text("|").foregroundColor(.white.opacity(0.35)).font(.system(size: 10))
+            Text("CPU 1214C").font(.system(size: 10.5)).foregroundColor(.white.opacity(0.75))
+        }
+        .padding(.horizontal, 8)
+        .frame(height: 24)
+        .background(Tia.statusBarV3)
     }
 }

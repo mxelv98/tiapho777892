@@ -1,120 +1,231 @@
 import SwiftUI
 
-/// S7-PLCSIM panel — styled after the real PLCSIM compact window:
-/// power, RUN/STOP, and the I/Q watch area where students drive the inputs.
-struct SimPanelView: View {
-    let device: PlcDevice
-    @EnvironmentObject var sim: Simulator
-    @Environment(\.dismiss) private var dismiss
+// MARK: - PLCSIM panel (v3 — built to the approved wireframe)
+//
+// Like S7-PLCSIM: a CPU control card (power, RUN/STOP, LEDs, MRES) and
+// the SIM table — monitor every tag live, modify inputs and memory.
+// Outputs are monitor-only; in the real tool you change them through
+// the program, and the training build keeps that rule.
 
-    private var inputs: [PlcTag] { device.tags.filter { $0.address.hasPrefix("%I") } }
-    private var outputs: [PlcTag] { device.tags.filter { $0.address.hasPrefix("%Q") } }
-    private var memory: [PlcTag] { device.tags.filter { $0.address.hasPrefix("%M") } }
+struct SimPanelView: View {
+    var device: PlcDevice
+    @ObservedObject var sim: Simulator
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 10) {
-                Image(systemName: "cpu.fill").foregroundColor(Tia.accent)
-                VStack(alignment: .leading, spacing: 0) {
-                    Text("S7-PLCSIM").font(.system(size: 14, weight: .bold))
-                    Text("\(device.name) — \(device.cpuName)").font(.system(size: 10.5)).foregroundColor(.secondary)
+        GeometryReader { geo in
+            if geo.size.width > geo.size.height {
+                HStack(spacing: 0) {
+                    cpuCard.frame(width: 210)
+                    Divider()
+                    simTable
                 }
-                Spacer()
-                Button("Close") { dismiss() }
-            }
-            .padding(10)
-            .background(Tia.paneHeader)
-            Divider()
-            HStack(alignment: .top, spacing: 0) {
-                // controls, like the PLCSIM compact view
-                VStack(spacing: 12) {
-                    Button {
-                        sim.attach(device)
-                        sim.power(!sim.powered)
-                    } label: {
-                        VStack(spacing: 3) {
-                            Image(systemName: "power").font(.system(size: 20))
-                                .foregroundColor(sim.powered ? Tia.runGreen : .secondary)
-                            Text(sim.powered ? "Power on" : "Power off").font(.system(size: 9.5))
-                        }
-                        .frame(width: 74, height: 56)
-                        .overlay(RoundedRectangle(cornerRadius: 4).stroke(Tia.border, lineWidth: 0.8))
-                    }
-                    .buttonStyle(.plain)
-                    HStack(spacing: 0) {
-                        modeButton("RUN", active: sim.running && sim.powered, color: Tia.runGreen) { sim.run(true) }
-                        modeButton("STOP", active: !sim.running && sim.powered, color: Tia.errorRed) { sim.run(false) }
-                    }
-                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(Tia.border, lineWidth: 0.8))
-                    Text(sim.powered ? (sim.running ? "CPU in RUN" : "CPU in STOP") : "CPU is off")
-                        .font(.system(size: 10.5, weight: .semibold))
-                        .foregroundColor(sim.running && sim.powered ? Tia.runGreen : .secondary)
-                    Button("Reset values") { sim.reset() }.font(.system(size: 10.5))
-                    if !sim.counts.isEmpty {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Counters").font(.system(size: 10, weight: .semibold))
-                            ForEach(sim.counts.sorted(by: { $0.key < $1.key }), id: \.key) { k, v in
-                                Text("\(k): CV = \(v)").font(.system(size: 10.5))
-                            }
-                        }
-                    }
-                    Spacer()
+            } else {
+                VStack(spacing: 0) {
+                    cpuCard
+                    Divider()
+                    simTable
                 }
-                .padding(10)
-                .frame(width: 128)
-                .background(Tia.pane)
-                Divider()
-                // watch area
-                ScrollView {
-                    HStack(alignment: .top, spacing: 14) {
-                        watchColumn("Inputs", tags: inputs, isInput: true)
-                        watchColumn("Outputs", tags: outputs, isInput: false)
-                        if !memory.isEmpty { watchColumn("Memory", tags: memory, isInput: false) }
-                    }
-                    .padding(10)
-                }
-                .background(Color.white)
             }
         }
-        .onAppear { sim.attach(device) }
+        .background(Color.white)
     }
 
-    private func modeButton(_ title: String, active: Bool, color: Color, action: @escaping () -> Void) -> some View {
+    private var cpuCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "cpu").font(.system(size: 14)).foregroundColor(Tia.textDark)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("PLC_1").font(.system(size: 12.5, weight: .bold)).foregroundColor(Tia.textDark)
+                    Text(device.cpuName).font(.system(size: 10)).foregroundColor(.secondary).lineLimit(1)
+                }
+            }
+            HStack(spacing: 6) {
+                simButton(sim.powered ? "Power ON" : "Power OFF", icon: "power",
+                          color: sim.powered ? Tia.runGreen : Color.gray) {
+                    sim.power(!sim.powered)
+                }
+            }
+            HStack(spacing: 6) {
+                simButton("RUN", icon: "play.fill", color: sim.running ? Tia.runGreen : Tia.paneHeader,
+                          dark: !sim.running) {
+                    if sim.powered { sim.run(true) }
+                }
+                simButton("STOP", icon: "stop.fill", color: !sim.running && sim.powered ? .orange : Tia.paneHeader,
+                          dark: sim.running || !sim.powered) {
+                    if sim.powered { sim.run(false) }
+                }
+            }
+            HStack(spacing: 10) {
+                cpuLed("RUN", on: sim.powered && sim.running, color: Tia.runGreen)
+                cpuLed("STOP", on: sim.powered && !sim.running, color: .orange)
+                cpuLed("ERROR", on: false, color: Tia.errorRed)
+                cpuLed("MAINT", on: false, color: .yellow)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Scan: 100ms").font(.system(size: 11)).foregroundColor(Tia.textDark)
+                Text("Mode: PLCSIM (training)").font(.system(size: 11)).foregroundColor(.secondary)
+            }
+            HStack(spacing: 6) {
+                simButton("MRES", icon: "arrow.counterclockwise", color: Tia.paneHeader, dark: true) {
+                    sim.reset()
+                }
+                simButton("Reset values", icon: "eraser", color: Tia.paneHeader, dark: true) {
+                    sim.reset()
+                }
+            }
+            Spacer()
+        }
+        .padding(10)
+        .background(Tia.pane)
+    }
+
+    private func simButton(_ label: String, icon: String, color: Color, dark: Bool = false,
+                           action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Text(title).font(.system(size: 11, weight: .bold))
-                .frame(width: 52, height: 30)
-                .background(active ? color.opacity(0.25) : Color.white)
-                .foregroundColor(active ? color : .secondary)
+            HStack(spacing: 4) {
+                Image(systemName: icon).font(.system(size: 10))
+                Text(label).font(.system(size: 11, weight: .semibold)).lineLimit(1)
+            }
+            .foregroundColor(dark ? Tia.textDark : .white)
+            .padding(.horizontal, 8).padding(.vertical, 6)
+            .frame(maxWidth: .infinity)
+            .background(color)
+            .overlay(RoundedRectangle(cornerRadius: 4).stroke(Tia.border, lineWidth: 0.6))
+            .clipShape(RoundedRectangle(cornerRadius: 4))
         }
         .buttonStyle(.plain)
-        .disabled(!sim.powered)
     }
 
-    private func watchColumn(_ title: String, tags: [PlcTag], isInput: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.system(size: 11.5, weight: .bold))
-            ForEach(tags) { t in
-                HStack(spacing: 7) {
-                    if isInput {
-                        Toggle("", isOn: Binding(
-                            get: { sim.values[t.name] ?? false },
-                            set: { sim.setInput(t.name, $0) }))
-                            .labelsHidden().toggleStyle(.switch).controlSize(.mini)
-                            .disabled(!sim.powered)
-                    } else {
-                        Circle()
-                            .fill((sim.values[t.name] ?? false) ? Tia.runGreen : Color.gray.opacity(0.35))
-                            .frame(width: 13, height: 13)
-                    }
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text(t.name).font(.system(size: 11.5))
-                        Text(t.address).font(.system(size: 9.5)).foregroundColor(.secondary)
-                    }
-                    Spacer()
-                }
-                .frame(width: 168)
-                Divider()
-            }
+    private func cpuLed(_ label: String, on: Bool, color: Color) -> some View {
+        VStack(spacing: 2) {
+            Circle().fill(on ? color : Color.gray.opacity(0.3)).frame(width: 10, height: 10)
+            Text(label).font(.system(size: 8, weight: .semibold)).foregroundColor(Tia.textDark)
         }
+    }
+
+    private var simTable: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                tableCell("Name", w: 130, bold: true)
+                tableCell("Address", w: 64, bold: true)
+                tableCell("Monitor", w: 92, bold: true)
+                tableCell("Modify", w: 110, bold: true)
+                Spacer()
+            }
+            .padding(.horizontal, 6).padding(.vertical, 4)
+            .background(Tia.paneHeader)
+            .overlay(Rectangle().frame(height: 0.7).foregroundColor(Tia.border), alignment: .bottom)
+            ScrollView {
+                VStack(spacing: 0) {
+                    ForEach(device.tags) { t in
+                        simRow(t)
+                    }
+                }
+            }
+            Text("Modified values affect the simulation only — no connection to a real PLC.")
+                .font(.system(size: 10)).foregroundColor(.secondary)
+                .padding(.horizontal, 8).padding(.vertical, 5)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Tia.pane)
+        }
+    }
+
+    private func simRow(_ t: PlcTag) -> some View {
+        let value = sim.values[t.name] ?? false
+        let isOutput = t.address.hasPrefix("%Q")
+        return HStack(spacing: 0) {
+            tableCell(t.name, w: 130)
+            tableCell(t.address, w: 64)
+            HStack(spacing: 5) {
+                Circle().fill(value ? Tia.onlineTrue : Color.gray.opacity(0.35)).frame(width: 9, height: 9)
+                Text(value ? "TRUE" : "FALSE")
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundColor(Tia.textDark)
+            }
+            .frame(width: 92, alignment: .leading)
+            if isOutput {
+                Text("(output)").font(.system(size: 10.5)).foregroundColor(.secondary)
+                    .frame(width: 110, alignment: .leading)
+            } else {
+                Toggle("", isOn: Binding(
+                    get: { sim.values[t.name] ?? false },
+                    set: { sim.setInput(t.name, $0) }
+                ))
+                .labelsHidden()
+                .frame(width: 110, alignment: .leading)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 6).padding(.vertical, 3)
+        .overlay(Rectangle().frame(height: 0.5).foregroundColor(Tia.border.opacity(0.45)), alignment: .bottom)
+    }
+
+    private func tableCell(_ s: String, w: CGFloat, bold: Bool = false) -> some View {
+        Text(s)
+            .font(.system(size: 11.5, weight: bold ? .bold : .regular))
+            .foregroundColor(Tia.textDark)
+            .lineLimit(1)
+            .frame(width: w, alignment: .leading)
+    }
+}
+
+// MARK: - Compact PLCSIM strip (portrait bottom-sheet tab)
+
+struct SimStripView: View {
+    var device: PlcDevice
+    @ObservedObject var sim: Simulator
+    var onExpand: () -> Void
+
+    private var quickInputs: [PlcTag] {
+        Array(device.tags.filter { $0.address.hasPrefix("%I") }.prefix(3))
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Button { sim.power(!sim.powered) } label: {
+                Image(systemName: "power")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundColor(sim.powered ? Tia.runGreen : .gray)
+                    .frame(width: 34, height: 34)
+                    .overlay(Circle().stroke(Tia.border, lineWidth: 0.8))
+            }
+            .buttonStyle(.plain)
+            Button { if sim.powered { sim.run(!sim.running) } } label: {
+                HStack(spacing: 4) {
+                    Circle().fill(sim.powered ? (sim.running ? Tia.runGreen : .orange) : .gray)
+                        .frame(width: 8, height: 8)
+                    Text(sim.powered ? (sim.running ? "RUN" : "STOP") : "OFF")
+                        .font(.system(size: 11.5, weight: .bold))
+                }
+                .foregroundColor(Tia.textDark)
+                .padding(.horizontal, 8).padding(.vertical, 6)
+                .overlay(RoundedRectangle(cornerRadius: 4).stroke(Tia.border, lineWidth: 0.7))
+            }
+            .buttonStyle(.plain)
+            Divider().frame(height: 30)
+            ForEach(quickInputs) { t in
+                VStack(spacing: 1) {
+                    Toggle("", isOn: Binding(
+                        get: { sim.values[t.name] ?? false },
+                        set: { sim.setInput(t.name, $0) }
+                    ))
+                    .labelsHidden()
+                    Text(shortAddr(t.address)).font(.system(size: 8.5)).foregroundColor(.secondary)
+                }
+            }
+            Spacer()
+            Button(action: onExpand) {
+                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                    .font(.system(size: 13)).foregroundColor(Tia.accent)
+                    .frame(width: 32, height: 32)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 10)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func shortAddr(_ a: String) -> String {
+        a.replacingOccurrences(of: "%", with: "")
     }
 }

@@ -1,557 +1,657 @@
 import SwiftUI
 
-/// LAD editor — networks drawn the way TIA draws them: block interface on
-/// top, title bar, comment, power rail, contacts / coils / boxes, and the
-/// zoom control at the bottom right. Operand labels are two lines:
-/// %address in teal bold, then the "name" in quotes, exactly like TIA.
-struct LadEditorView: View {
-    var block: PlcBlock
-    var tags: [PlcTag]
-    var sim: Simulator?
-    var onChange: (PlcBlock) -> Void
+// MARK: - LAD editor (v3 — built to the approved wireframe)
+//
+// Block interface on top, favorites bar, then the networks. Operand
+// labels are two lines: the %address in SF Mono Bold teal (#007B8A),
+// the "name" in grey below it. Timer/counter boxes are #EFEFEF with a
+// header band and the instance name above the box. Online, a live wire
+// is solid green (#1E9E4A) and a dead wire dashed blue (#3A7BD5).
+// Editing is tap-to-target: tap an element to select it (insertion
+// points (+) appear), then tap a favorite or a task-card instruction to
+// insert there. Double-tap toggles NO<->NC and cycles () -> S -> R.
+// Pinch zooms 50–200% with semantic levels; the HUD has a Fit button.
 
-    @State private var editing: LadElement?
-    @State private var editingPath: (net: Int, series: Int?, isOutput: Bool, isParallel: Bool) = (0, nil, false, false)
+struct LadEditorView: View {
+    @Binding var device: PlcDevice
+    var blockIndex: Int
+    @ObservedObject var sim: Simulator
+    var online: Bool
+    @Binding var insertRequest: LadElementKind?
+
     @State private var zoom: CGFloat = 1.0
     @State private var showInterface = true
-    @State private var editingVar: InterfaceVar?
-    @State private var varName = ""
-    @State private var varSection = "Temp"
-    @State private var varType = "Bool"
+    @State private var selNet: Int? = nil
+    @State private var selPos: Int = -1          // series index; -2 = output; -3 = parallel idx encoded separately
+    @State private var selParallel: Int? = nil   // parallel index when selected
+    @State private var insNet: Int? = nil        // insertion target network
+    @State private var insPos: Int = 0           // insertion index in series (0...count)
+    @State private var tagPickerFor: TagTarget? = nil
 
-    private var monitoring: Bool { (sim?.powered ?? false) }
-    private var wireColor: Color { monitoring ? Tia.runGreen : Tia.wire }
+    struct TagTarget: Identifiable {
+        var id = UUID()
+        var net: Int
+        var pos: Int        // series index, or -2 for output
+        var parallel: Bool
+    }
+
+    private var block: PlcBlock {
+        device.blocks.indices.contains(blockIndex) ? device.blocks[blockIndex] : PlcBlock()
+    }
+    private var live: Bool { online && sim.powered }
+    private var showDetail: Bool { zoom >= 0.78 }        // semantic level: comments + (+) points
+    private var z: CGFloat { zoom }
 
     var body: some View {
-        ZStack(alignment: .bottomTrailing) {
-            ScrollView([.vertical, .horizontal]) {
-                VStack(alignment: .leading, spacing: 0) {
-                    favoritesBar
-                    if block.interfaceRows != nil { interfaceSection }
-                    ForEach(Array(block.networks.enumerated()), id: \.element.id) { ni, net in
-                        networkView(ni: ni, net: net)
+        VStack(spacing: 0) {
+            interfaceBar
+            favoritesBar
+            GeometryReader { geo in
+                ScrollView([.vertical, .horizontal]) {
+                    VStack(alignment: .leading, spacing: 14 * z) {
+                        ForEach(Array(block.networks.enumerated()), id: \.element.id) { ni, net in
+                            networkView(ni, net)
+                        }
+                        addNetworkButton
                     }
-                    Button {
-                        var b = block
-                        b.networks.append(LadNetwork(title: "", output: LadElement(kind: .coil, tag: tags.first?.name ?? "")))
-                        onChange(b)
-                    } label: {
-                        Label("Add network", systemImage: "plus.rectangle.on.rectangle")
-                            .font(.system(size: 12)).foregroundColor(Tia.accent)
-                    }
-                    .padding(10)
+                    .padding(10 * z)
+                    .frame(minWidth: geo.size.width, alignment: .leading)
+                    .background(
+                        MagnificationGesture()
+                            .onChanged { v in zoom = min(2.0, max(0.5, v)) }
+                    )
                 }
                 .background(Color.white)
+                .overlay(alignment: .bottomTrailing) {
+                    ZoomHUD(zoom: $zoom) { fit(geo.size.width) }
+                        .padding(8)
+                }
+                .overlay(alignment: .bottomLeading) {
+                    if selNet != nil { actionStrip.padding(8) }
+                }
             }
-            .background(Color.white)
-            zoomControl
         }
-        .sheet(item: $editing) { el in elementSheet(el) }
-        .sheet(isPresented: Binding(get: { editingVar != nil }, set: { if !$0 { editingVar = nil } })) { varSheet }
+        .background(Color.white)
+        .onChange(of: insertRequest) { kind in
+            if let kind { insert(kind); insertRequest = nil }
+        }
+        .sheet(item: $tagPickerFor) { target in
+            TagPickerSheet(tags: device.tags) { name in
+                assignTag(target, name)
+                tagPickerFor = nil
+            }
+        }
     }
 
-    // MARK: zoom (bottom-right, like the real editor)
-
-    private var zoomControl: some View {
-        HStack(spacing: 2) {
-            Button { zoom = max(0.5, zoom - 0.25) } label: { Image(systemName: "minus") }
-            Text("\(Int(zoom * 100))%").font(.system(size: 11, weight: .medium)).frame(width: 40)
-            Button { zoom = min(2, zoom + 0.25) } label: { Image(systemName: "plus") }
-        }
-        .foregroundColor(Tia.textDark)
-        .padding(.horizontal, 6).padding(.vertical, 3)
-        .background(RoundedRectangle(cornerRadius: 4).fill(Color.white)
-            .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
-            .overlay(RoundedRectangle(cornerRadius: 4).stroke(Tia.border, lineWidth: 0.7)))
-        .padding(8)
+    private func fit(_ width: CGFloat) {
+        zoom = min(2.0, max(0.5, (width - 16) / 640))
     }
 
-    // MARK: favorites bar — every symbol of the taught set, drawn as glyphs
+    // MARK: Block interface + favorites
+
+    private var interfaceBar: some View {
+        VStack(spacing: 0) {
+            Button { showInterface.toggle() } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: showInterface ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .bold))
+                    Text("Block interface").font(.system(size: 11.5, weight: .semibold))
+                    Spacer()
+                    Text("\(block.name) [\(block.type)\(block.number)] — \(block.language)")
+                        .font(.system(size: 10.5)).foregroundColor(.secondary)
+                }
+                .foregroundColor(Tia.textDark)
+                .padding(.horizontal, 8)
+                .frame(height: 28)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .background(Tia.networkBar)
+            if showInterface, let rows = block.interfaceRows, !rows.isEmpty {
+                VStack(spacing: 0) {
+                    HStack {
+                        Text("Name").frame(width: 130, alignment: .leading)
+                        Text("Data type").frame(width: 70, alignment: .leading)
+                        Text("Comment").frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .font(.system(size: 10, weight: .bold)).foregroundColor(Tia.textDark)
+                    .padding(.horizontal, 8).padding(.vertical, 2)
+                    ForEach(rows) { r in
+                        HStack {
+                            Text("\(r.section) · \(r.name)").frame(width: 130, alignment: .leading)
+                            Text(r.dataType).frame(width: 70, alignment: .leading)
+                            Text(r.comment).frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .font(.system(size: 10.5)).foregroundColor(Tia.textDark)
+                        .padding(.horizontal, 8).padding(.vertical, 1.5)
+                    }
+                }
+                .background(Color.white)
+                .overlay(Rectangle().frame(height: 0.7).foregroundColor(Tia.border), alignment: .bottom)
+            }
+        }
+    }
 
     private var favoritesBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 2) {
-                ForEach(InstructionCatalog.families.flatMap { $0.items }.filter { $0.kind != nil }) { item in
-                    Button { addToLastNetwork(item) } label: {
-                        VStack(spacing: 1) {
-                            glyph(item.symbol).frame(height: 20)
-                            Text(item.symbol).font(.system(size: 8)).foregroundColor(.secondary)
-                        }
-                        .frame(width: 40, height: 36)
-                        .background(RoundedRectangle(cornerRadius: 3).fill(Tia.pane))
+            HStack(spacing: 4) {
+                ForEach(favorites, id: \.kind) { f in
+                    Button { insert(f.kind) } label: {
+                        Text(f.glyph)
+                            .font(.system(size: 12, weight: .bold, design: .monospaced))
+                            .foregroundColor(Tia.textDark)
+                            .frame(width: 42, height: 28)
+                            .background(Color.white)
+                            .overlay(RoundedRectangle(cornerRadius: 3).stroke(Tia.border, lineWidth: 0.7))
                     }
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, 6).padding(.vertical, 4)
+            .padding(.horizontal, 6)
         }
-        .background(Tia.toolbar)
+        .frame(height: 36)
+        .background(Tia.pane)
         .overlay(Rectangle().frame(height: 0.7).foregroundColor(Tia.border), alignment: .bottom)
     }
 
-    @ViewBuilder private func glyph(_ s: String) -> some View {
-        switch s {
-        case "| |": glyphPath { p in
-            p.move(to: CGPoint(x: 2, y: 10)); p.addLine(to: CGPoint(x: 13, y: 10))
-            p.move(to: CGPoint(x: 13, y: 3)); p.addLine(to: CGPoint(x: 13, y: 17))
-            p.move(to: CGPoint(x: 27, y: 3)); p.addLine(to: CGPoint(x: 27, y: 17))
-            p.move(to: CGPoint(x: 27, y: 10)); p.addLine(to: CGPoint(x: 38, y: 10)) }
-        case "|/|": glyphPath { p in
-            p.move(to: CGPoint(x: 2, y: 10)); p.addLine(to: CGPoint(x: 13, y: 10))
-            p.move(to: CGPoint(x: 13, y: 3)); p.addLine(to: CGPoint(x: 13, y: 17))
-            p.move(to: CGPoint(x: 27, y: 3)); p.addLine(to: CGPoint(x: 27, y: 17))
-            p.move(to: CGPoint(x: 27, y: 10)); p.addLine(to: CGPoint(x: 38, y: 10))
-            p.move(to: CGPoint(x: 11, y: 17)); p.addLine(to: CGPoint(x: 29, y: 3)) }
-        case "|P|", "|N|":
-            ZStack {
-                glyphPath { p in
-                    p.move(to: CGPoint(x: 2, y: 10)); p.addLine(to: CGPoint(x: 13, y: 10))
-                    p.move(to: CGPoint(x: 13, y: 3)); p.addLine(to: CGPoint(x: 13, y: 17))
-                    p.move(to: CGPoint(x: 27, y: 3)); p.addLine(to: CGPoint(x: 27, y: 17))
-                    p.move(to: CGPoint(x: 27, y: 10)); p.addLine(to: CGPoint(x: 38, y: 10)) }
-                Text(s == "|P|" ? "P" : "N").font(.system(size: 9, weight: .bold)).foregroundColor(Tia.textDark)
-                    .background(Color.white)
-            }
-        case "( )", "(S)", "(R)":
-            ZStack {
-                glyphPath { p in
-                    p.move(to: CGPoint(x: 2, y: 10)); p.addLine(to: CGPoint(x: 12, y: 10))
-                    p.addArc(center: CGPoint(x: 19, y: 10), radius: 7, startAngle: .degrees(90), endAngle: .degrees(270), clockwise: false)
-                    p.addArc(center: CGPoint(x: 21, y: 10), radius: 7, startAngle: .degrees(270), endAngle: .degrees(90), clockwise: false)
-                    p.move(to: CGPoint(x: 28, y: 10)); p.addLine(to: CGPoint(x: 38, y: 10)) }
-                if s != "( )" {
-                    Text(s == "(S)" ? "S" : "R").font(.system(size: 9, weight: .bold)).foregroundColor(Tia.textDark)
-                }
-            }
-        case "NOT":
-            Text("NOT").font(.system(size: 9, weight: .bold)).foregroundColor(Tia.textDark)
-                .padding(.horizontal, 3).overlay(Rectangle().stroke(Tia.wire, lineWidth: 1))
-        default:
-            Text(s).font(.system(size: 10, weight: .bold)).foregroundColor(Tia.textDark)
-                .padding(.horizontal, 4).padding(.vertical, 2)
-                .overlay(Rectangle().stroke(Tia.wire, lineWidth: 1))
-        }
+    private var favorites: [(kind: LadElementKind, glyph: String)] {
+        [(.contactNO, "┤├"), (.contactNC, "┤/├"), (.coil, "( )"), (.coilSet, "(S)"),
+         (.coilReset, "(R)"), (.pTrig, "┤P├"), (.nTrig, "┤N├"), (.notOp, "NOT"),
+         (.ton, "TON"), (.tof, "TOF"), (.tp, "TP"), (.ctu, "CTU"), (.ctd, "CTD")]
     }
 
-    private func glyphPath(_ build: (inout Path) -> Void) -> some View {
-        Path { p in build(&p) }.stroke(Tia.wire, lineWidth: 1.4).frame(width: 40, height: 20)
-    }
+    // MARK: Network rendering
 
-    // MARK: block interface
-
-    private var interfaceSection: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Button { showInterface.toggle() } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: showInterface ? "chevron.down" : "chevron.right")
-                    Text("Block interface").font(.system(size: 12, weight: .semibold))
-                    Spacer()
-                    Text("\(block.name) [\(block.type) \(block.number)]").font(.system(size: 11)).foregroundColor(.secondary)
-                }
-                .foregroundColor(Tia.textDark)
-                .padding(.horizontal, 8).padding(.vertical, 5)
-                .background(Tia.headerBand)
-            }
-            .buttonStyle(.plain)
-            if showInterface {
-                HStack(spacing: 0) {
-                    ifaceCell("Name", 130, bold: true); ifaceCell("Section", 70, bold: true)
-                    ifaceCell("Data type", 70, bold: true); ifaceCell("Comment", 170, bold: true)
-                }.background(Color(white: 0.96))
-                ForEach(block.interfaceRows ?? []) { v in
-                    Button { openVar(v) } label: {
-                        HStack(spacing: 0) {
-                            ifaceCell(v.name, 130); ifaceCell(v.section, 70)
-                            ifaceCell(v.dataType, 70); ifaceCell(v.comment, 170)
-                        }
-                    }.buttonStyle(.plain)
-                    Rectangle().frame(height: 0.5).foregroundColor(Tia.border)
-                }
-                Button {
-                    var b = block
-                    var rows = b.interfaceRows ?? []
-                    rows.append(InterfaceVar(name: "Var_\(rows.count)", section: "Temp", dataType: "Bool"))
-                    b.interfaceRows = rows
-                    onChange(b)
-                } label: {
-                    Label("Add variable", systemImage: "plus").font(.system(size: 11)).foregroundColor(Tia.accent)
-                }.padding(.horizontal, 8).padding(.vertical, 4)
-            }
-            Rectangle().frame(height: 0.7).foregroundColor(Tia.border)
-        }
-    }
-
-    private func ifaceCell(_ s: String, _ w: CGFloat, bold: Bool = false) -> some View {
-        Text(s).font(.system(size: 11.5, weight: bold ? .semibold : .regular)).foregroundColor(Tia.textDark)
-            .frame(width: w, alignment: .leading).padding(.leading, 6).padding(.vertical, 2).lineLimit(1)
-    }
-
-    private func openVar(_ v: InterfaceVar) {
-        editingVar = v; varName = v.name; varSection = v.section; varType = v.dataType
-    }
-
-    private var varSheet: some View {
-        NavigationStack {
-            Form {
-                TextField("Name", text: $varName)
-                Picker("Section", selection: $varSection) {
-                    ForEach(["Input", "Output", "InOut", "Static", "Temp", "Constant", "Return"], id: \.self) { Text($0).tag($0) }
-                }
-                Picker("Data type", selection: $varType) {
-                    ForEach(["Bool", "Byte", "Word", "Int", "DInt", "Real", "Time"], id: \.self) { Text($0).tag($0) }
-                }
-                if let v = editingVar {
-                    Button("Delete variable", role: .destructive) {
-                        var b = block
-                        b.interfaceRows?.removeAll { $0.id == v.id }
-                        onChange(b); editingVar = nil
-                    }
-                }
-            }
-            .navigationTitle("Variable")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { editingVar = nil } }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") {
-                        if let v = editingVar {
-                            var b = block
-                            if let i = b.interfaceRows?.firstIndex(where: { $0.id == v.id }) {
-                                b.interfaceRows?[i].name = varName
-                                b.interfaceRows?[i].section = varSection
-                                b.interfaceRows?[i].dataType = varType
-                                onChange(b)
-                            }
-                        }
-                        editingVar = nil
-                    }
-                }
-            }
-        }
-    }
-
-    // MARK: networks
-
-    private func networkView(ni: Int, net: LadNetwork) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
+    private func networkView(_ ni: Int, _ net: LadNetwork) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
-                Text("Network \(ni + 1):").font(.system(size: 12 * zoom, weight: .bold)).foregroundColor(Tia.textDark)
+                Text("▾ Network \(ni + 1):")
+                    .font(.system(size: 12 * z, weight: .bold)).foregroundColor(Tia.textDark)
                 TextField("Title", text: titleBinding(ni))
-                    .font(.system(size: 12 * zoom)).foregroundColor(Tia.textDark)
-                Spacer()
-                Menu {
-                    Button("Add parallel branch") { addParallel(ni) }
-                    Button("Delete network", role: .destructive) {
-                        var b = block; b.networks.remove(at: ni); onChange(b)
+                    .font(.system(size: 12 * z)).foregroundColor(Tia.textDark)
+                if selNet == ni {
+                    Button { deleteNetwork(ni) } label: {
+                        Image(systemName: "trash").font(.system(size: 11 * z)).foregroundColor(Tia.errorRed)
                     }
-                } label: { Image(systemName: "ellipsis.circle").foregroundColor(.secondary) }
-            }
-            .padding(.horizontal, 8).padding(.vertical, 3)
-            .background(Tia.headerBand)
-            TextField("Comment", text: commentBinding(ni))
-                .font(.system(size: 11 * zoom)).foregroundColor(.secondary)
-                .padding(.horizontal, 8).padding(.vertical, 2)
-            rung(ni: ni, net: net)
-            Rectangle().frame(height: 0.7).foregroundColor(Tia.border)
-        }
-    }
-
-    private func rung(ni: Int, net: LadNetwork) -> some View {
-        let z = zoom
-        let elW: CGFloat = 92 * z, boxW: CGFloat = 118 * z
-        let rungH: CGFloat = (net.parallel.isEmpty ? 104 : 148) * z
-        let midY: CGFloat = 56 * z
-        let contentW = 26 + net.series.reduce(CGFloat(0)) { $0 + (isBox($1.kind) ? boxW : elW) } + elW + 20
-        return ZStack(alignment: .topLeading) {
-            Rectangle().fill(wireColor).frame(width: 2.4, height: rungH).offset(x: 10)
-            Rectangle().fill(wireColor).frame(width: 2.4, height: rungH).offset(x: max(contentW - 4, 300))
-            HStack(alignment: .top, spacing: 0) {
-                Color.clear.frame(width: 12)
-                ForEach(Array(net.series.enumerated()), id: \.element.id) { si, el in
-                    elementView(el, z: z)
-                        .onTapGesture { editingPath = (ni, si, false, false); editing = el }
+                    .buttonStyle(.plain)
                 }
-                elementView(net.output, z: z)
-                    .onTapGesture { editingPath = (ni, nil, true, false); editing = net.output }
-                Spacer(minLength: 0)
             }
-            .offset(y: midY - 52 * z)
+            if showDetail && !net.comment.isEmpty {
+                Text(net.comment).font(.system(size: 10.5 * z).italic()).foregroundColor(.secondary)
+            }
+            rungView(ni, net)
             if !net.parallel.isEmpty {
+                parallelView(ni, net)
+            }
+        }
+        .padding(6 * z)
+        .frame(width: 640 * z, alignment: .leading)
+        .background(selNet == ni ? Color(red: 0.97, green: 0.98, blue: 1.0) : Color.white)
+        .overlay(RoundedRectangle(cornerRadius: 3).stroke(Tia.border.opacity(0.6), lineWidth: 0.7))
+        .onTapGesture { selNet = ni }
+    }
+
+    private func rungView(_ ni: Int, _ net: LadNetwork) -> some View {
+        let flows = flowStates(net)
+        return HStack(alignment: .top, spacing: 0) {
+            // power rail
+            Rectangle()
+                .fill(live ? (sim.running ? Tia.onlineTrue : Tia.onlineFalse) : Tia.wire)
+                .frame(width: 3.5 * z, height: 64 * z)
+                .padding(.trailing, 2)
+            ForEach(Array(net.series.enumerated()), id: \.element.id) { ei, el in
+                if showDetail && insNet == ni && insPos == ei {
+                    insertPoint { }
+                }
+                wireSegment(on: flows[ei])
+                elementCell(ni, ei, el, parallel: false)
+            }
+            wireSegment(on: flows.last ?? true)
+            outputCell(ni, net.output)
+        }
+    }
+
+    private func parallelView(_ ni: Int, _ net: LadNetwork) -> some View {
+        HStack(alignment: .top, spacing: 0) {
+            Rectangle().fill(live ? Tia.onlineTrue : Tia.wire).frame(width: 3.5 * z, height: 30 * z)
+                .padding(.trailing, 2)
+            VStack(alignment: .leading, spacing: 0) {
+                Rectangle().fill(live ? Tia.onlineTrue : Tia.wire).frame(width: 30 * z, height: 1.6 * z)
                 HStack(alignment: .top, spacing: 0) {
-                    Color.clear.frame(width: 12 + elW)
-                    ForEach(Array(net.parallel.enumerated()), id: \.element.id) { pi, el in
-                        elementView(el, z: z)
-                            .onTapGesture { editingPath = (ni, pi, false, true); editing = el }
+                    ForEach(Array(net.parallel.enumerated()), id: \.element.id) { ei, el in
+                        elementCell(ni, ei, el, parallel: true)
+                        wireSegment(on: live)
                     }
-                    Spacer(minLength: 0)
                 }
-                .offset(y: midY + 2 * z)
-                Rectangle().fill(wireColor).frame(width: 2, height: 46 * z)
-                    .offset(x: 12 + elW / 2, y: midY - 46 * z + 4)
             }
+            Spacer()
         }
-        .frame(width: max(contentW, 340), height: rungH)
+        .padding(.leading, 6 * z)
     }
 
-    @ViewBuilder private func elementView(_ el: LadElement, z: CGFloat) -> some View {
-        switch el.kind {
-        case .ton, .tof, .tp: timerBox(el, z: z)
-        case .ctu, .ctd: counterBox(el, z: z)
-        case .notOp:
+    private func wireSegment(on: Bool) -> some View {
+        let color: Color = live ? (on ? Tia.onlineTrue : Tia.onlineFalse) : Tia.wire
+        return ZStack {
+            if live && !on {
+                DashedLine().stroke(color, lineWidth: 1.6 * z)
+            } else {
+                Rectangle().fill(color).frame(height: 1.8 * z)
+            }
+        }
+        .frame(width: 14 * z, height: 64 * z)
+    }
+
+    private func insertPoint(action: @escaping () -> Void) -> some View {
+        Image(systemName: "plus.circle.fill")
+            .font(.system(size: 15 * z))
+            .foregroundColor(Tia.accent)
+            .frame(width: 16 * z, height: 64 * z)
+    }
+
+    // MARK: Elements
+
+    @ViewBuilder
+    private func elementCell(_ ni: Int, _ ei: Int, _ el: LadElement, parallel: Bool) -> some View {
+        let selected = selNet == ni && (parallel ? selParallel == ei : (selParallel == nil && selPos == ei))
+        VStack(spacing: 1) {
+            if isBox(el.kind) {
+                boxView(ni, ei, el, parallel: parallel)
+            } else {
+                operandLabel(el)
+                LadGlyph(kind: el.kind, color: Tia.wire, scale: z)
+                    .frame(width: 46 * z, height: 30 * z)
+            }
+        }
+        .padding(3 * z)
+        .background(selected ? Tia.selection : Color.clear)
+        .overlay(RoundedRectangle(cornerRadius: 3).stroke(selected ? Tia.accent : Color.clear, lineWidth: 1))
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2) { toggleKind(ni, ei, parallel: parallel) }
+        .onTapGesture {
+            selNet = ni
+            if parallel { selParallel = ei; selPos = -1 } else { selParallel = nil; selPos = ei }
+            insNet = ni; insPos = ei + 1
+        }
+        .onLongPressGesture {
+            selNet = ni
+            if parallel { selParallel = ei; selPos = -1 } else { selParallel = nil; selPos = ei }
+            tagPickerFor = TagTarget(net: ni, pos: ei, parallel: parallel)
+        }
+    }
+
+    @ViewBuilder
+    private func outputCell(_ ni: Int, _ el: LadElement) -> some View {
+        let selected = selNet == ni && selParallel == nil && selPos == -2
+        VStack(spacing: 1) {
+            if isBox(el.kind) {
+                boxView(ni, -2, el, parallel: false)
+            } else {
+                operandLabel(el)
+                LadGlyph(kind: el.kind, color: Tia.wire, scale: z)
+                    .frame(width: 46 * z, height: 30 * z)
+            }
+        }
+        .padding(3 * z)
+        .background(selected ? Tia.selection : Color.clear)
+        .overlay(RoundedRectangle(cornerRadius: 3).stroke(selected ? Tia.accent : Color.clear, lineWidth: 1))
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2) { toggleKind(ni, -2, parallel: false) }
+        .onTapGesture {
+            selNet = ni; selParallel = nil; selPos = -2
+            insNet = ni; insPos = block.networks[ni].series.count
+        }
+        .onLongPressGesture {
+            selNet = ni; selParallel = nil; selPos = -2
+            tagPickerFor = TagTarget(net: ni, pos: -2, parallel: false)
+        }
+    }
+
+    private func operandLabel(_ el: LadElement) -> some View {
+        VStack(spacing: 0) {
+            Text(addressOf(el.tag))
+                .font(.system(size: 10.5 * z, weight: .bold, design: .monospaced))
+                .foregroundColor(Tia.labelTeal)
+            Text(el.tag.isEmpty ? "\"???\"" : "\"\(el.tag)\"")
+                .font(.system(size: 10 * z))
+                .foregroundColor(Tia.nameGrey)
+        }
+        .frame(height: 26 * z)
+        .onTapGesture {
+            // label tap is handled by the cell (selection); the picker
+            // opens on long-press, as in the touch matrix.
+        }
+    }
+
+    private func boxView(_ ni: Int, _ ei: Int, _ el: LadElement, parallel: Bool) -> some View {
+        VStack(spacing: 1) {
+            Text(el.instance.isEmpty ? "???" : el.instance)
+                .font(.system(size: 9.5 * z)).foregroundColor(.secondary)
+            VStack(spacing: 0) {
+                Text(kindName(el.kind))
+                    .font(.system(size: 10.5 * z, weight: .bold)).foregroundColor(Tia.textDark)
+                    .frame(width: 92 * z, height: 15 * z)
+                    .background(Tia.boxHeader)
+                HStack {
+                    Text(isTimer(el.kind) ? "IN" : (el.kind == .ctu ? "CU" : "CD"))
+                        .font(.system(size: 9.5 * z)).foregroundColor(Tia.textDark)
+                    Spacer()
+                    Text("Q").font(.system(size: 9.5 * z)).foregroundColor(Tia.textDark)
+                    Circle()
+                        .fill((sim.values[el.tag] ?? false) && live ? Tia.onlineTrue : Color.gray.opacity(0.4))
+                        .frame(width: 7 * z, height: 7 * z)
+                }
+                .padding(.horizontal, 4 * z)
+                .frame(height: 14 * z)
+                HStack {
+                    Text(isTimer(el.kind) ? "PT" : "PV").font(.system(size: 9.5 * z)).foregroundColor(Tia.textDark)
+                    Spacer()
+                    Text(el.preset).font(.system(size: 9.5 * z, weight: .semibold, design: .monospaced)).foregroundColor(Tia.textDark)
+                }
+                .padding(.horizontal, 4 * z)
+                .frame(height: 14 * z)
+                if isCounter(el.kind) {
+                    HStack {
+                        Text("CV").font(.system(size: 9.5 * z)).foregroundColor(Tia.textDark)
+                        Spacer()
+                        Text("\(sim.counts[el.instance] ?? 0)")
+                            .font(.system(size: 9.5 * z, weight: .bold, design: .monospaced))
+                            .foregroundColor(live ? Tia.onlineTrue : Tia.textDark)
+                    }
+                    .padding(.horizontal, 4 * z)
+                    .frame(height: 14 * z)
+                }
+            }
+            .frame(width: 96 * z)
+            .background(Tia.boxFillV3)
+            .overlay(RoundedRectangle(cornerRadius: 2).stroke(Tia.wire, lineWidth: 0.9))
+        }
+    }
+
+    // MARK: Floating action strip (selection)
+
+    private var actionStrip: some View {
+        HStack(spacing: 4) {
+            stripButton("Toggle", "arrow.triangle.2.circlepath") {
+                if let ni = selNet { toggleKind(ni, selParallel ?? selPos, parallel: selParallel != nil) }
+            }
+            stripButton("Tag", "tag") {
+                if let ni = selNet {
+                    tagPickerFor = TagTarget(net: ni, pos: selPos, parallel: selParallel != nil)
+                }
+            }
+            stripButton("Branch", "arrow.branch") { addBranch() }
+            stripButton("Delete", "trash") { deleteSelected() }
+        }
+        .padding(4)
+        .background(Color.white)
+        .overlay(RoundedRectangle(cornerRadius: 5).stroke(Tia.border, lineWidth: 0.8))
+        .clipShape(RoundedRectangle(cornerRadius: 5))
+        .shadow(color: .black.opacity(0.15), radius: 3, y: 1)
+    }
+
+    private func stripButton(_ label: String, _ icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
             VStack(spacing: 1) {
-                label(el, z: z)
-                ZStack {
-                    Rectangle().fill(Tia.boxFill).frame(width: 44 * z, height: 22 * z)
-                        .overlay(Rectangle().stroke(wireColor, lineWidth: 1.2))
-                    Text("NOT").font(.system(size: 10 * z, weight: .bold)).foregroundColor(Tia.textDark)
-                }
-                .frame(width: 92 * z, height: 46 * z)
+                Image(systemName: icon).font(.system(size: 12))
+                Text(label).font(.system(size: 8.5))
             }
-            .frame(width: 92 * z)
-        default: contactOrCoil(el, z: z)
+            .foregroundColor(Tia.textDark)
+            .frame(width: 48, height: 32)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
     }
 
-    private func isBox(_ k: LadElementKind) -> Bool { [.ton, .tof, .tp, .ctu, .ctd].contains(k) }
+    private var addNetworkButton: some View {
+        Button {
+            updateBlock { $0.networks.append(LadNetwork(title: "New network", output: LadElement(kind: .coil))) }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "plus.circle").font(.system(size: 12 * z))
+                Text("Add network").font(.system(size: 11.5 * z, weight: .semibold))
+            }
+            .foregroundColor(Tia.accent)
+            .padding(.vertical, 6 * z)
+        }
+        .buttonStyle(.plain)
+    }
 
-    private func contactOrCoil(_ el: LadElement, z: CGFloat) -> some View {
-        let live = monitoring && (sim?.values[el.tag] ?? false)
-        let col = live ? Tia.runGreen : wireColor
-        return VStack(spacing: 1) {
-            label(el, z: z)
-            ZStack {
-                Path { p in
-                    p.move(to: CGPoint(x: 0, y: 23 * z)); p.addLine(to: CGPoint(x: 92 * z, y: 23 * z))
-                }.stroke(col, lineWidth: 1.6)
+    // MARK: Editing operations
+
+    private func updateBlock(_ change: (inout PlcBlock) -> Void) {
+        guard device.blocks.indices.contains(blockIndex) else { return }
+        var b = device.blocks[blockIndex]
+        change(&b)
+        device.blocks[blockIndex] = b
+    }
+
+    private func insert(_ kind: LadElementKind) {
+        let ni = insNet ?? selNet ?? (block.networks.count - 1)
+        guard block.networks.indices.contains(ni) else { return }
+        var el = LadElement(kind: kind)
+        if isBox(kind) {
+            el.instance = "\(kindName(kind))_\(ni + 1)"
+            if isCounter(kind) { el.preset = "5"; el.presetValue = 5 }
+        }
+        if kind == .coil || kind == .coilSet || kind == .coilReset {
+            // a coil from the palette replaces the network output, like TIA
+            updateBlock { $0.networks[ni].output = el }
+            selNet = ni; selPos = -2; selParallel = nil
+            return
+        }
+        let pos = min(insPos, block.networks[ni].series.count)
+        updateBlock { $0.networks[ni].series.insert(el, at: pos) }
+        selNet = ni; selPos = pos; selParallel = nil
+        insPos = pos + 1
+    }
+
+    private func toggleKind(_ ni: Int, _ pos: Int, parallel: Bool) {
+        updateBlock { b in
+            func flip(_ el: inout LadElement) {
                 switch el.kind {
-                case .contactNO, .contactNC, .pTrig, .nTrig:
-                    Path { p in
-                        p.move(to: CGPoint(x: 33 * z, y: 8 * z)); p.addLine(to: CGPoint(x: 33 * z, y: 38 * z))
-                        p.move(to: CGPoint(x: 59 * z, y: 8 * z)); p.addLine(to: CGPoint(x: 59 * z, y: 38 * z))
-                        if el.kind == .contactNC {
-                            p.move(to: CGPoint(x: 30 * z, y: 38 * z)); p.addLine(to: CGPoint(x: 62 * z, y: 8 * z))
-                        }
-                    }.stroke(col, lineWidth: 1.8)
-                    if el.kind == .pTrig || el.kind == .nTrig {
-                        Text(el.kind == .pTrig ? "P" : "N")
-                            .font(.system(size: 11 * z, weight: .bold)).foregroundColor(Tia.textDark)
-                            .background(Color.white)
-                    }
-                default: // coils
-                    Path { p in
-                        p.addArc(center: CGPoint(x: 41 * z, y: 23 * z), radius: 13 * z, startAngle: .degrees(90), endAngle: .degrees(270), clockwise: false)
-                        p.addArc(center: CGPoint(x: 51 * z, y: 23 * z), radius: 13 * z, startAngle: .degrees(270), endAngle: .degrees(90), clockwise: false)
-                    }.stroke(col, lineWidth: 1.8)
-                    if el.kind == .coilSet || el.kind == .coilReset {
-                        Text(el.kind == .coilSet ? "S" : "R")
-                            .font(.system(size: 11 * z, weight: .bold)).foregroundColor(Tia.textDark)
-                            .background(Color.white)
-                    }
+                case .contactNO: el.kind = .contactNC
+                case .contactNC: el.kind = .contactNO
+                case .pTrig: el.kind = .nTrig
+                case .nTrig: el.kind = .pTrig
+                case .coil: el.kind = .coilSet
+                case .coilSet: el.kind = .coilReset
+                case .coilReset: el.kind = .coil
+                default: break
                 }
             }
-            .frame(width: 92 * z, height: 46 * z)
-        }
-        .frame(width: 92 * z)
-    }
-
-    /// Two-line operand label, exactly TIA's style: %I0.0 teal bold / "TagName".
-    @ViewBuilder private func label(_ el: LadElement, z: CGFloat) -> some View {
-        if el.kind == .notOp {
-            Text(" ").font(.system(size: 10 * z))
-            Text(" ").font(.system(size: 9.5 * z))
-        } else {
-            let tag = tags.first(where: { $0.name == el.tag })
-            Text(tag?.address ?? "???").font(.system(size: 10 * z, weight: .bold)).foregroundColor(Tia.tealText)
-            Text("\"\(el.tag)\"").font(.system(size: 9.5 * z)).foregroundColor(Tia.textDark).lineLimit(1)
-        }
-    }
-
-    private func timerBox(_ el: LadElement, z: CGFloat) -> some View {
-        let title = el.kind == .ton ? "TON" : (el.kind == .tof ? "TOF" : "TP")
-        return VStack(spacing: 1) {
-            Text("\"\(el.instance)\"").font(.system(size: 9.5 * z)).foregroundColor(Tia.textDark).lineLimit(1)
-            ZStack(alignment: .topLeading) {
-                VStack(spacing: 0) {
-                    Text(title).font(.system(size: 10.5 * z, weight: .bold)).foregroundColor(Tia.textDark)
-                        .frame(width: 118 * z, height: 17 * z).background(Tia.boxHeader)
-                    Rectangle().fill(Tia.boxFill).frame(width: 118 * z, height: 62 * z)
-                }
-                .overlay(Rectangle().stroke(wireColor, lineWidth: 1.2))
-                VStack(alignment: .leading, spacing: 3 * z) {
-                    pinRow("IN", "", z)
-                    pinRow("PT", el.preset, z)
-                    pinRow("Q", "\"\(el.tag)\"", z)
-                    pinRow("ET", "—", z)
-                }
-                .padding(.top, 21 * z).padding(.horizontal, 5 * z)
+            if parallel {
+                if b.networks[ni].parallel.indices.contains(pos) { flip(&b.networks[ni].parallel[pos]) }
+            } else if pos == -2 {
+                flip(&b.networks[ni].output)
+            } else if b.networks[ni].series.indices.contains(pos) {
+                flip(&b.networks[ni].series[pos])
             }
-            .frame(width: 118 * z, height: 79 * z)
         }
-        .frame(width: 118 * z)
     }
 
-    private func counterBox(_ el: LadElement, z: CGFloat) -> some View {
-        let isUp = el.kind == .ctu
-        let cv = sim?.counts[el.instance]
-        return VStack(spacing: 1) {
-            Text("\"\(el.instance)\"").font(.system(size: 9.5 * z)).foregroundColor(Tia.textDark).lineLimit(1)
-            ZStack(alignment: .topLeading) {
-                VStack(spacing: 0) {
-                    Text(isUp ? "CTU" : "CTD").font(.system(size: 10.5 * z, weight: .bold)).foregroundColor(Tia.textDark)
-                        .frame(width: 118 * z, height: 17 * z).background(Tia.boxHeader)
-                    Rectangle().fill(Tia.boxFill).frame(width: 118 * z, height: 74 * z)
+    private func deleteSelected() {
+        guard let ni = selNet else { return }
+        if let pi = selParallel {
+            updateBlock { if $0.networks[ni].parallel.indices.contains(pi) { $0.networks[ni].parallel.remove(at: pi) } }
+            selParallel = nil
+        } else if selPos >= 0 {
+            updateBlock { if $0.networks[ni].series.indices.contains(selPos) { $0.networks[ni].series.remove(at: selPos) } }
+            selPos = -1
+        }
+    }
+
+    private func deleteNetwork(_ ni: Int) {
+        updateBlock { if $0.networks.indices.contains(ni) { $0.networks.remove(at: ni) } }
+        selNet = nil; selPos = -1; selParallel = nil
+    }
+
+    private func addBranch() {
+        guard let ni = selNet else { return }
+        updateBlock { $0.networks[ni].parallel.append(LadElement(kind: .contactNO)) }
+    }
+
+    private func assignTag(_ target: TagTarget, _ name: String) {
+        updateBlock { b in
+            if target.parallel {
+                if b.networks[target.net].parallel.indices.contains(target.pos) {
+                    b.networks[target.net].parallel[target.pos].tag = name
                 }
-                .overlay(Rectangle().stroke(wireColor, lineWidth: 1.2))
-                VStack(alignment: .leading, spacing: 3 * z) {
-                    pinRow(isUp ? "CU" : "CD", el.inputTag.isEmpty ? "" : "\"\(el.inputTag)\"", z)
-                    pinRow("R", "", z)
-                    pinRow("PV", el.preset, z)
-                    pinRow("Q", "\"\(el.tag)\"", z)
-                    pinRow("CV", cv.map { "\($0)" } ?? "—", z)
-                }
-                .padding(.top, 21 * z).padding(.horizontal, 5 * z)
+            } else if target.pos == -2 {
+                b.networks[target.net].output.tag = name
+            } else if b.networks[target.net].series.indices.contains(target.pos) {
+                b.networks[target.net].series[target.pos].tag = name
             }
-            .frame(width: 118 * z, height: 91 * z)
         }
-        .frame(width: 118 * z)
-    }
-
-    private func pinRow(_ pin: String, _ val: String, _ z: CGFloat) -> some View {
-        HStack(spacing: 3) {
-            Text(pin).font(.system(size: 9.5 * z, weight: .semibold)).foregroundColor(Tia.textDark)
-            Text(val).font(.system(size: 9.5 * z)).foregroundColor(Tia.tealText).lineLimit(1)
-            Spacer(minLength: 0)
-        }
-    }
-
-    // MARK: editing
-
-    private func addToLastNetwork(_ item: InstructionItem) {
-        guard let el = InstructionCatalog.makeElement(item, tags: tags), !block.networks.isEmpty else { return }
-        var b = block
-        let li = b.networks.count - 1
-        if el.kind == .coil || el.kind == .coilSet || el.kind == .coilReset {
-            b.networks[li].output = el
-        } else {
-            b.networks[li].series.append(el)
-        }
-        onChange(b)
-    }
-
-    private func addParallel(_ ni: Int) {
-        var b = block
-        b.networks[ni].parallel.append(LadElement(kind: .contactNO, tag: tags.first?.name ?? ""))
-        onChange(b)
     }
 
     private func titleBinding(_ ni: Int) -> Binding<String> {
-        Binding(get: { block.networks[ni].title },
-                set: { v in var b = block; b.networks[ni].title = v; onChange(b) })
-    }
-    private func commentBinding(_ ni: Int) -> Binding<String> {
-        Binding(get: { block.networks[ni].comment },
-                set: { v in var b = block; b.networks[ni].comment = v; onChange(b) })
+        Binding(
+            get: { block.networks.indices.contains(ni) ? block.networks[ni].title : "" },
+            set: { v in updateBlock { if $0.networks.indices.contains(ni) { $0.networks[ni].title = v } } }
+        )
     }
 
-    private func elementSheet(_ el: LadElement) -> some View {
-        ElementSheet(element: el, tags: tags) { newEl in
-            var b = block
-            let p = editingPath
-            if p.isOutput { b.networks[p.net].output = newEl }
-            else if p.isParallel { if let i = p.series { b.networks[p.net].parallel[i] = newEl } }
-            else if let i = p.series { b.networks[p.net].series[i] = newEl }
-            onChange(b)
-            editing = nil
-        } onDelete: {
-            var b = block
-            let p = editingPath
-            if p.isParallel { if let i = p.series { b.networks[p.net].parallel.remove(at: i) } }
-            else if let i = p.series { b.networks[p.net].series.remove(at: i) }
-            onChange(b)
-            editing = nil
-        } onCancel: { editing = nil }
+    // MARK: Helpers
+
+    private func addressOf(_ tag: String) -> String {
+        device.tags.first { $0.name == tag }?.address ?? "%??"
     }
-}
 
-/// Element properties — the sheet TIA would call "Properties" for the
-/// selected instruction: operand picker, instance, preset.
-struct ElementSheet: View {
-    @State var element: LadElement
-    var tags: [PlcTag]
-    var onSave: (LadElement) -> Void
-    var onDelete: () -> Void
-    var onCancel: () -> Void
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section("Instruction") {
-                    Picker("Type", selection: $element.kind) {
-                        Text("Contact NO  --| |--").tag(LadElementKind.contactNO)
-                        Text("Contact NC  --|/|--").tag(LadElementKind.contactNC)
-                        Text("Coil  --( )--").tag(LadElementKind.coil)
-                        Text("Set coil  --(S)--").tag(LadElementKind.coilSet)
-                        Text("Reset coil  --(R)--").tag(LadElementKind.coilReset)
-                        Text("Positive edge  --|P|--").tag(LadElementKind.pTrig)
-                        Text("Negative edge  --|N|--").tag(LadElementKind.nTrig)
-                        Text("NOT — invert RLO").tag(LadElementKind.notOp)
-                        Text("TON — on-delay timer").tag(LadElementKind.ton)
-                        Text("TOF — off-delay timer").tag(LadElementKind.tof)
-                        Text("TP — pulse timer").tag(LadElementKind.tp)
-                        Text("CTU — count up").tag(LadElementKind.ctu)
-                        Text("CTD — count down").tag(LadElementKind.ctd)
-                    }
-                }
-                switch element.kind {
-                case .ton, .tof, .tp:
-                    Section("Timer") {
-                        TextField("Instance name", text: $element.instance)
-                        Stepper("PT: \(element.presetSeconds, specifier: "%.1f") s  (\(element.preset))", value: $element.presetSeconds, in: 0.5...60, step: 0.5)
-                            .onChange(of: element.presetSeconds) { v in element.preset = "T#\(Self.fmtSecs(v))s" }
-                        Picker("Output tag (Q)", selection: $element.tag) {
-                            Text("—").tag("")
-                            ForEach(tags) { t in Text("\(t.name)  \(t.address)").tag(t.name) }
-                        }
-                    }
-                case .ctu, .ctd:
-                    Section("Counter") {
-                        TextField("Instance name", text: $element.instance)
-                        Picker(element.kind == .ctu ? "Count input tag (CU)" : "Count input tag (CD)", selection: $element.inputTag) {
-                            Text("Rung power").tag("")
-                            ForEach(tags) { t in Text("\(t.name)  \(t.address)").tag(t.name) }
-                        }
-                        Stepper("Preset value (PV): \(element.presetValue)", value: $element.presetValue, in: 1...999)
-                            .onChange(of: element.presetValue) { v in element.preset = "\(v)" }
-                        Picker("Output tag (Q)", selection: $element.tag) {
-                            Text("—").tag("")
-                            ForEach(tags) { t in Text("\(t.name)  \(t.address)").tag(t.name) }
-                        }
-                        Text("Reset: use a Reset coil whose operand is the counter instance name.")
-                            .font(.footnote).foregroundColor(.secondary)
-                    }
-                case .notOp:
-                    Section { Text("NOT inverts the rung power at this point. It has no operand.").font(.footnote).foregroundColor(.secondary) }
-                default:
-                    Section("Operand") {
-                        Picker("Tag", selection: $element.tag) {
-                            Text("—").tag("")
-                            ForEach(tags) { t in Text("\(t.name)  \(t.address)").tag(t.name) }
-                        }
-                        TextField("or type a tag name", text: $element.tag)
-                    }
-                }
-                Section {
-                    Button("Delete element", role: .destructive) { onDelete() }
-                }
-            }
-            .navigationTitle("Properties")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { onCancel() } }
-                ToolbarItem(placement: .confirmationAction) { Button("Done") { onSave(element) } }
-            }
+    private func isBox(_ k: LadElementKind) -> Bool { isTimer(k) || isCounter(k) }
+    private func isTimer(_ k: LadElementKind) -> Bool { k == .ton || k == .tof || k == .tp }
+    private func isCounter(_ k: LadElementKind) -> Bool { k == .ctu || k == .ctd }
+    private func kindName(_ k: LadElementKind) -> String {
+        switch k {
+        case .ton: return "TON"
+        case .tof: return "TOF"
+        case .tp: return "TP"
+        case .ctu: return "CTU"
+        case .ctd: return "CTD"
+        default: return ""
         }
     }
 
-    static func fmtSecs(_ v: Double) -> String {
-        v == v.rounded() ? "\(Int(v))" : String(format: "%.1f", v)
+    /// Prefix power flow through the series rung, for the online wire
+    /// colours. Mirrors the simulator's value table; edge contacts are
+    /// approximated by their current operand value.
+    private func flowStates(_ net: LadNetwork) -> [Bool] {
+        guard live else { return Array(repeating: true, count: net.series.count + 1) }
+        var states: [Bool] = []
+        var power = true
+        for el in net.series {
+            states.append(power)
+            switch el.kind {
+            case .notOp: power = !power
+            case .contactNC: power = power && !(sim.values[el.tag] ?? false)
+            default: power = power && (sim.values[el.tag] ?? false)
+            }
+        }
+        states.append(power)
+        return states
+    }
+}
+
+// MARK: - Glyphs & dashed wire
+
+struct LadGlyph: View {
+    var kind: LadElementKind
+    var color: Color
+    var scale: CGFloat = 1
+    var body: some View {
+        GeometryReader { g in
+            let w = g.size.width, h = g.size.height, mid = h / 2
+            let lw: CGFloat = 1.8 * scale
+            ZStack {
+                Path { p in
+                    p.move(to: CGPoint(x: 0, y: mid)); p.addLine(to: CGPoint(x: w, y: mid))
+                }.stroke(color, lineWidth: lw)
+                switch kind {
+                case .contactNO, .pTrig, .nTrig:
+                    Path { p in
+                        p.move(to: CGPoint(x: w * 0.32, y: mid - h * 0.34)); p.addLine(to: CGPoint(x: w * 0.32, y: mid + h * 0.34))
+                        p.move(to: CGPoint(x: w * 0.68, y: mid - h * 0.34)); p.addLine(to: CGPoint(x: w * 0.68, y: mid + h * 0.34))
+                    }.stroke(color, lineWidth: lw)
+                    if kind != .contactNO {
+                        Text(kind == .pTrig ? "P" : "N")
+                            .font(.system(size: 11 * scale, weight: .bold))
+                            .foregroundColor(Tia.textDark)
+                            .position(x: w * 0.5, y: mid)
+                    }
+                case .contactNC:
+                    Path { p in
+                        p.move(to: CGPoint(x: w * 0.32, y: mid - h * 0.34)); p.addLine(to: CGPoint(x: w * 0.32, y: mid + h * 0.34))
+                        p.move(to: CGPoint(x: w * 0.68, y: mid - h * 0.34)); p.addLine(to: CGPoint(x: w * 0.68, y: mid + h * 0.34))
+                        p.move(to: CGPoint(x: w * 0.24, y: mid + h * 0.30)); p.addLine(to: CGPoint(x: w * 0.76, y: mid - h * 0.30))
+                    }.stroke(color, lineWidth: lw)
+                case .coil, .coilSet, .coilReset:
+                    Path { p in
+                        p.addArc(center: CGPoint(x: w * 0.40, y: mid), radius: h * 0.30, startAngle: .degrees(90), endAngle: .degrees(270), clockwise: false)
+                        p.addArc(center: CGPoint(x: w * 0.60, y: mid), radius: h * 0.30, startAngle: .degrees(270), endAngle: .degrees(90), clockwise: false)
+                    }.stroke(color, lineWidth: lw)
+                    if kind != .coil {
+                        Text(kind == .coilSet ? "S" : "R")
+                            .font(.system(size: 10 * scale, weight: .bold))
+                            .foregroundColor(Tia.textDark)
+                            .position(x: w * 0.5, y: mid)
+                    }
+                case .notOp:
+                    RoundedRectangle(cornerRadius: 2).stroke(color, lineWidth: lw)
+                        .frame(width: w * 0.62, height: h * 0.62)
+                        .position(x: w * 0.5, y: mid)
+                    Text("NOT").font(.system(size: 8.5 * scale, weight: .bold))
+                        .foregroundColor(Tia.textDark)
+                        .position(x: w * 0.5, y: mid)
+                default:
+                    EmptyView()
+                }
+            }
+        }
+    }
+}
+
+struct DashedLine: Shape {
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        p.move(to: CGPoint(x: rect.minX, y: rect.midY))
+        p.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
+        return p.strokedPath(StrokeStyle(lineWidth: 1.6, dash: [4, 3]))
+    }
+}
+
+// MARK: - Tag picker (operand autocomplete, like the touch matrix)
+
+struct TagPickerSheet: View {
+    var tags: [PlcTag]
+    var onPick: (String) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var query = ""
+    var body: some View {
+        NavigationView {
+            List {
+                ForEach(tags.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }) { t in
+                    Button {
+                        onPick(t.name)
+                    } label: {
+                        HStack {
+                            Text(t.address)
+                                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                                .foregroundColor(Tia.labelTeal)
+                                .frame(width: 58, alignment: .leading)
+                            Text(t.name).font(.system(size: 13)).foregroundColor(Tia.textDark)
+                            Spacer()
+                            Text(t.dataType).font(.system(size: 11)).foregroundColor(.secondary)
+                        }
+                    }
+                }
+            }
+            .searchable(text: $query, prompt: "Tag name or address")
+            .navigationTitle("Select operand")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+        }
     }
 }

@@ -97,7 +97,7 @@ struct HmiElement: Identifiable, Codable, Equatable {
     var kind: HmiElementKind = .button
     var text: String = ""
     var tag: String = ""          // PLC tag binding (button/lamp) or counter instance (ioField/bar)
-    var x: Double = 20            // position on the 350x230 screen canvas
+    var x: Double = 20            // position on the 800x480 KTP700 canvas
     var y: Double = 20
     var w: Double = 96
     var h: Double = 40
@@ -199,14 +199,14 @@ struct TiaProject: Identifiable, Codable {
         p.watchTags = ["BtnStart", "SensCount", "BeltA", "Blade", "BatchFull", "StackGreen"]
         var screen = HmiScreen(name: "Screen_1")
         screen.elements = [
-            HmiElement(kind: .textLabel, text: "Sorting Station", x: 16, y: 10, w: 200, h: 24),
-            HmiElement(kind: .button, text: "START", tag: "BtnStart", x: 16, y: 52, w: 110, h: 52),
-            HmiElement(kind: .lamp, text: "Running", tag: "LampRun", x: 150, y: 52, w: 84, h: 52),
-            HmiElement(kind: .lamp, text: "Blade", tag: "Blade", x: 250, y: 52, w: 84, h: 52, colorOn: "red"),
-            HmiElement(kind: .textLabel, text: "Boxes in batch", x: 16, y: 122, w: 140, h: 20),
-            HmiElement(kind: .ioField, text: "Count", tag: "BatchCounter", x: 16, y: 146, w: 110, h: 40),
-            HmiElement(kind: .bar, text: "Batch", tag: "BatchCounter", x: 150, y: 146, w: 184, h: 40),
-            HmiElement(kind: .lamp, text: "Batch full", tag: "BatchFull", x: 250, y: 122, w: 84, h: 20, colorOn: "orange")
+            HmiElement(kind: .textLabel, text: "Sorting Station", x: 24, y: 16, w: 420, h: 44),
+            HmiElement(kind: .button, text: "START", tag: "BtnStart", x: 24, y: 96, w: 220, h: 96),
+            HmiElement(kind: .lamp, text: "Running", tag: "LampRun", x: 280, y: 96, w: 180, h: 96),
+            HmiElement(kind: .lamp, text: "Blade", tag: "Blade", x: 496, y: 96, w: 180, h: 96, colorOn: "red"),
+            HmiElement(kind: .textLabel, text: "Boxes in batch", x: 24, y: 232, w: 260, h: 36),
+            HmiElement(kind: .ioField, text: "Count", tag: "BatchCounter", x: 24, y: 280, w: 220, h: 76),
+            HmiElement(kind: .bar, text: "Batch", tag: "BatchCounter", x: 280, y: 280, w: 396, h: 76),
+            HmiElement(kind: .lamp, text: "Batch full", tag: "BatchFull", x: 496, y: 232, w: 180, h: 36, colorOn: "orange")
         ]
         p.hmi = HmiDevice(screens: [screen])
         return p

@@ -1,190 +1,265 @@
 import SwiftUI
 
-/// Device configuration editor: "Device view" with the rack drawn like TIA,
-/// and the "Device overview" table underneath.
+// MARK: - Device configuration (v3 — built to the approved wireframe)
+//
+// Device view: the rack drawn on the blue-grey device background, the
+// Device overview table underneath, and the detail tabs (Properties /
+// IO tags / System constants / Texts) for the selected module. CPU LEDs
+// are live from PLCSIM in online mode. Nothing is ever crushed: the
+// rack and the table scroll horizontally.
+
 struct DeviceConfigView: View {
     @Binding var device: PlcDevice
-    @State private var selectedSlot: Int? = 1
+    @ObservedObject var sim: Simulator
+    var online: Bool
+    @State private var selectedId: UUID? = nil
+    @State private var detailTab = 0
+    @State private var viewTab = 0
+
+    private var selected: PlcModule? {
+        device.modules.first { $0.id == selectedId } ?? device.modules.first
+    }
+    private var live: Bool { online && sim.powered }
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Text("Device view").font(.system(size: 11, weight: .semibold)).foregroundColor(Tia.accent)
-                Text("Network view").font(.system(size: 11)).foregroundColor(.secondary)
-                Spacer()
-                Text("Zoom 100%").font(.system(size: 10.5)).foregroundColor(.secondary)
-            }
-            .padding(.horizontal, 8).padding(.vertical, 4)
-            .background(Color.white)
-            Divider()
-            // rack
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(alignment: .top, spacing: 3) {
-                    ForEach(device.modules) { m in
-                        rackSlot(m)
-                    }
-                    ForEach(0..<3, id: \.self) { _ in
-                        RoundedRectangle(cornerRadius: 2)
-                            .stroke(Tia.border, lineWidth: 1)
-                            .frame(width: 54, height: 118)
-                            .background(Color(red: 0.97, green: 0.97, blue: 0.98))
-                    }
+            viewTabs
+            if viewTab == 0 {
+                rackArea
+                overviewTable
+                detailArea
+            } else {
+                VStack(spacing: 6) {
+                    Image(systemName: viewTab == 1 ? "network" : "point.3.connected.trianglepath.dotted")
+                        .font(.system(size: 26)).foregroundColor(.secondary)
+                    Text(viewTab == 1 ? "Network view — the CPU and the KTP700 are connected over PROFINET (HMI_Connection_1)."
+                                      : "Topology view — port-to-port interconnections are a PC exercise; the training build covers the Device view.")
+                        .font(.system(size: 12)).foregroundColor(.secondary)
+                        .multilineTextAlignment(.center).padding(.horizontal, 24)
                 }
-                .padding(10)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Tia.rackBG)
             }
-            .frame(height: 142)
-            .background(Tia.rackBG)
-            Divider()
-            // device overview table
-            ScrollView(.horizontal, showsIndicators: false) {
-            VStack(spacing: 0) {
-                tableHeader
-                ScrollView {
-                    VStack(spacing: 0) {
-                        ForEach(device.modules) { m in
-                            HStack(spacing: 0) {
-                                cell(m.name, 190, bold: m.slot == 1)
-                                cell("\(m.slot / 100)", 46)
-                                cell("\(m.slot)", 46)
-                                cell(m.iAddress, 70)
-                                cell(m.qAddress, 70)
-                                cell(m.slot == 1 ? device.cpuName : m.name, 190)
-                                cell(m.article, 170)
-                                cell(m.firmware, 70)
-                                Spacer()
-                            }
-                            .background(selectedSlot == m.slot ? Tia.selection : Color.white)
-                            .contentShape(Rectangle())
-                            .onTapGesture { selectedSlot = m.slot }
-                            Divider()
-                        }
-                    }
-                }
-            }
-            .frame(minWidth: 860)
-            }
-            .background(Color.white)
-            detailsSection
         }
-        .background(Color.white)
+        .background(Tia.rackBG)
+        .onAppear { if selectedId == nil { selectedId = device.modules.first?.id } }
     }
 
-    // Details view under the device view, like the real editor:
-    // Properties / IO tags / System constants / Texts tabs.
-    @State private var detailTab = 0
+    private var viewTabs: some View {
+        HStack(spacing: 2) {
+            ForEach(Array(["Device view", "Network view", "Topology view"].enumerated()), id: \.offset) { i, t in
+                Button { viewTab = i } label: {
+                    Text(t).font(.system(size: 11.5, weight: viewTab == i ? .semibold : .regular))
+                        .foregroundColor(Tia.textDark)
+                        .padding(.horizontal, 10).padding(.vertical, 4)
+                        .background(viewTab == i ? Color.white : Tia.paneHeader)
+                        .overlay(RoundedRectangle(cornerRadius: 3).stroke(Tia.border, lineWidth: 0.6))
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer()
+            Text("PLC_1").font(.system(size: 11.5, weight: .semibold)).foregroundColor(Tia.textDark)
+        }
+        .padding(.horizontal, 6).padding(.vertical, 4)
+        .background(Tia.pane)
+        .overlay(Rectangle().frame(height: 0.7).foregroundColor(Tia.border), alignment: .bottom)
+    }
 
-    private var detailsSection: some View {
+    // MARK: Rack
+
+    private var rackArea: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 4) {
+                Rectangle()
+                    .fill(Color(red: 0.55, green: 0.58, blue: 0.62))
+                    .frame(height: 8)
+                    .overlay(Text("Rail").font(.system(size: 8)).foregroundColor(.white), alignment: .leading)
+                HStack(alignment: .top, spacing: 5) {
+                    ForEach(device.modules) { m in
+                        moduleCard(m)
+                    }
+                    emptySlot(1)
+                    emptySlot(2)
+                }
+            }
+            .padding(10)
+        }
+        .frame(height: 148)
+        .background(Tia.rackBG)
+    }
+
+    private func moduleCard(_ m: PlcModule) -> some View {
+        let isCPU = m.slot == 1
+        let sel = selected?.id == m.id
+        return VStack(alignment: .leading, spacing: 3) {
+            HStack {
+                Text("\(m.slot)").font(.system(size: 9, weight: .bold)).foregroundColor(.white)
+                Spacer()
+                if isCPU {
+                    HStack(spacing: 4) {
+                        led("RUN", on: live && sim.running, color: Tia.runGreen)
+                        led("STOP", on: live && !sim.running, color: .orange)
+                        led("ERR", on: false, color: Tia.errorRed)
+                    }
+                }
+            }
+            Text(isCPU ? device.cpuName : m.name)
+                .font(.system(size: 9.5, weight: .bold)).foregroundColor(.white)
+                .lineLimit(3)
+            Spacer()
+            if isCPU {
+                Text("TIA PHONE").font(.system(size: 8, weight: .heavy)).foregroundColor(Tia.siemensTeal)
+                Text(device.article).font(.system(size: 7.5)).foregroundColor(.white.opacity(0.8)).lineLimit(1)
+            } else {
+                Text(m.iAddress.isEmpty ? "" : "I \(m.iAddress)")
+                    .font(.system(size: 8)).foregroundColor(.white.opacity(0.85))
+                Text(m.qAddress.isEmpty ? "" : "Q \(m.qAddress)")
+                    .font(.system(size: 8)).foregroundColor(.white.opacity(0.85))
+            }
+        }
+        .padding(6)
+        .frame(width: isCPU ? 108 : 82, height: 112)
+        .background(isCPU ? Tia.cpuDark : Tia.moduleBlue)
+        .overlay(RoundedRectangle(cornerRadius: 3).stroke(sel ? Tia.accent : Color.white.opacity(0.35), lineWidth: sel ? 2 : 0.8))
+        .clipShape(RoundedRectangle(cornerRadius: 3))
+        .onTapGesture { selectedId = m.id }
+    }
+
+    private func led(_ label: String, on: Bool, color: Color) -> some View {
+        VStack(spacing: 1) {
+            Circle().fill(on ? color : Color.white.opacity(0.25)).frame(width: 7, height: 7)
+            Text(label).font(.system(size: 6)).foregroundColor(.white.opacity(0.8))
+        }
+    }
+
+    private func emptySlot(_ n: Int) -> some View {
+        VStack(spacing: 4) {
+            Image(systemName: "plus").font(.system(size: 15)).foregroundColor(.secondary)
+            Text("Empty").font(.system(size: 9)).foregroundColor(.secondary)
+            Text("add from Catalog").font(.system(size: 7.5)).foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(width: 82, height: 112)
+        .overlay(RoundedRectangle(cornerRadius: 3).stroke(style: StrokeStyle(lineWidth: 1, dash: [4, 3])).foregroundColor(.secondary))
+    }
+
+    // MARK: Device overview
+
+    private var overviewTable: some View {
         VStack(spacing: 0) {
-            Divider()
-            HStack(spacing: 0) {
+            PaneHeader(title: "Device overview")
+            ScrollView(.horizontal, showsIndicators: false) {
+                VStack(spacing: 0) {
+                    overviewRow(cells: ["Module", "Rack", "Slot", "I address", "Q address", "Type", "Article no.", "Firmware"], header: true, m: nil)
+                    ForEach(device.modules) { m in
+                        overviewRow(cells: [m.name, "0", "\(m.slot)", m.iAddress, m.qAddress,
+                                            m.slot == 1 ? device.cpuName : m.name, m.article, m.firmware],
+                                    header: false, m: m)
+                    }
+                }
+            }
+        }
+        .background(Color.white)
+        .overlay(Rectangle().frame(height: 0.7).foregroundColor(Tia.border), alignment: .top)
+    }
+
+    private func overviewRow(cells: [String], header: Bool, m: PlcModule?) -> some View {
+        let widths: [CGFloat] = [170, 44, 44, 76, 76, 170, 168, 70]
+        let sel = m != nil && selected?.id == m?.id
+        return HStack(spacing: 0) {
+            ForEach(Array(cells.enumerated()), id: \.offset) { i, c in
+                Text(c)
+                    .font(.system(size: 11, weight: header ? .bold : .regular))
+                    .foregroundColor(Tia.textDark)
+                    .lineLimit(1)
+                    .frame(width: widths[i], alignment: .leading)
+                    .padding(.horizontal, 5)
+            }
+        }
+        .padding(.vertical, 3)
+        .background(header ? Tia.paneHeader : (sel ? Tia.selection : Color.white))
+        .overlay(Rectangle().frame(height: 0.5).foregroundColor(Tia.border.opacity(0.5)), alignment: .bottom)
+        .contentShape(Rectangle())
+        .onTapGesture { if let m { selectedId = m.id } }
+    }
+
+    // MARK: Detail tabs
+
+    private var detailArea: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 2) {
                 ForEach(Array(["Properties", "IO tags", "System constants", "Texts"].enumerated()), id: \.offset) { i, t in
                     Button { detailTab = i } label: {
                         Text(t).font(.system(size: 11, weight: detailTab == i ? .semibold : .regular))
                             .foregroundColor(Tia.textDark)
-                            .padding(.horizontal, 10).padding(.vertical, 4)
-                            .background(detailTab == i ? Color.white : Tia.toolbar)
+                            .padding(.horizontal, 8).padding(.vertical, 3)
+                            .background(detailTab == i ? Color.white : Color.clear)
+                            .overlay(RoundedRectangle(cornerRadius: 3).stroke(Tia.border, lineWidth: 0.6))
                     }
                     .buttonStyle(.plain)
                 }
                 Spacer()
             }
-            .background(Tia.toolbar)
-            Group {
-                switch detailTab {
-                case 1:
-                    ScrollView {
-                        VStack(spacing: 0) {
-                            ForEach(device.tags) { t in
-                                HStack(spacing: 0) {
-                                    cell(t.name, 190)
-                                    cell(t.dataType, 92)
-                                    cell(t.address, 118)
-                                    cell(t.comment, 220)
-                                    Spacer()
-                                }
-                                Divider()
-                            }
-                            if device.tags.isEmpty {
-                                Text("No IO tags.").font(.system(size: 11)).foregroundColor(.secondary).padding(8)
-                            }
-                        }
-                    }
-                    .frame(height: 92)
-                case 2:
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Default_DI_DQ — system constant, value 16#7A0").font(.system(size: 11)).foregroundColor(Tia.textDark)
-                        Text("Local — system constant of the CPU's integrated IO").font(.system(size: 11)).foregroundColor(Tia.textDark)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading).padding(8)
-                case 3:
-                    Text("No texts defined for this device.").font(.system(size: 11)).foregroundColor(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading).padding(8)
-                default:
-                    if let m = device.modules.first(where: { $0.slot == (selectedSlot ?? 1) }) ?? device.modules.first {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text("Name: \(m.name)").font(.system(size: 11)).foregroundColor(Tia.textDark)
-                            Text("Article no.: \(m.article.isEmpty ? "—" : m.article)   Firmware: \(m.firmware.isEmpty ? "—" : m.firmware)").font(.system(size: 11)).foregroundColor(Tia.textDark)
-                            Text("I address: \(m.iAddress.isEmpty ? "—" : m.iAddress)   Q address: \(m.qAddress.isEmpty ? "—" : m.qAddress)").font(.system(size: 11)).foregroundColor(Tia.textDark)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading).padding(8)
-                    }
-                }
+            .padding(.horizontal, 6).padding(.vertical, 4)
+            .background(Tia.paneHeader)
+            ScrollView {
+                detailContent
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .frame(height: 96)
             .background(Color.white)
         }
+        .overlay(Rectangle().frame(height: 0.7).foregroundColor(Tia.border), alignment: .top)
     }
 
-    private func rackSlot(_ m: PlcModule) -> some View {
-        VStack(spacing: 2) {
-            Text("\(m.slot)").font(.system(size: 8.5)).foregroundColor(.secondary)
-            ZStack {
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(m.slot == 1 ? Tia.cpuDark : Tia.moduleBlue)
-                VStack(spacing: 3) {
-                    if m.slot == 1 {
-                        Text("SIEMENS").font(.system(size: 7, weight: .bold)).foregroundColor(.white)
-                            .padding(.horizontal, 3).padding(.vertical, 1)
-                            .background(Tia.siemensTeal)
-                        Text("S7-1200").font(.system(size: 8, weight: .bold)).foregroundColor(.white)
-                        RoundedRectangle(cornerRadius: 1).fill(Color(red: 0.2, green: 0.25, blue: 0.3)).frame(width: 34, height: 20)
-                        HStack(spacing: 2) {
-                            Circle().fill(Tia.runGreen).frame(width: 4, height: 4)
-                            Circle().fill(Color.orange).frame(width: 4, height: 4)
-                            Circle().fill(Color.gray).frame(width: 4, height: 4)
-                        }
-                    }
-                    Text(m.slot == 1 ? "1214C" : String(m.name.prefix(9)))
-                        .font(.system(size: 7.5)).foregroundColor(.white).multilineTextAlignment(.center)
+    @ViewBuilder
+    private var detailContent: some View {
+        switch detailTab {
+        case 0:
+            VStack(alignment: .leading, spacing: 3) {
+                if let m = selected {
+                    detailRow("Name", m.slot == 1 ? "PLC_1" : m.name)
+                    detailRow("Type", m.slot == 1 ? device.cpuName : m.name)
+                    detailRow("Article no.", m.slot == 1 ? device.article : m.article)
+                    detailRow("Firmware", m.slot == 1 ? device.firmware : m.firmware)
+                    detailRow("Slot", "\(m.slot) · Rack 0")
                 }
-                .padding(3)
             }
-            .frame(width: 54, height: 96)
-            .overlay(RoundedRectangle(cornerRadius: 2).stroke(selectedSlot == m.slot ? Tia.accent : Tia.border, lineWidth: selectedSlot == m.slot ? 2 : 0.7))
+        case 1:
+            VStack(alignment: .leading, spacing: 2) {
+                if device.tags.isEmpty {
+                    Text("No tags yet — add them in the PLC tag table.").font(.system(size: 11.5)).foregroundColor(.secondary)
+                }
+                ForEach(device.tags) { t in
+                    HStack(spacing: 8) {
+                        Text(t.address).font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .foregroundColor(Tia.labelTeal).frame(width: 56, alignment: .leading)
+                        Text(t.name).font(.system(size: 11.5)).foregroundColor(Tia.textDark)
+                        Text(t.dataType).font(.system(size: 11)).foregroundColor(.secondary)
+                    }
+                }
+            }
+        case 2:
+            VStack(alignment: .leading, spacing: 3) {
+                ForEach(device.modules) { m in
+                    detailRow("Local~\(m.name)", m.slot == 1 ? "CPU" : "Module")
+                }
+                detailRow("Local~Common", "System")
+            }
+        default:
+            VStack(alignment: .leading, spacing: 3) {
+                detailRow("Device name", "PLC_1")
+                detailRow("Comment", "Training station — S7-1200")
+            }
         }
-        .onTapGesture { selectedSlot = m.slot }
     }
 
-    private var tableHeader: some View {
-        HStack(spacing: 0) {
-            cell("Module", 190, bold: true)
-            cell("Rack", 46, bold: true)
-            cell("Slot", 46, bold: true)
-            cell("I address", 70, bold: true)
-            cell("Q address", 70, bold: true)
-            cell("Type", 190, bold: true)
-            cell("Article no.", 170, bold: true)
-            cell("Firmware", 70, bold: true)
-            Spacer()
+    private func detailRow(_ k: String, _ v: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text(k).font(.system(size: 11.5, weight: .semibold)).foregroundColor(Tia.textDark)
+                .frame(width: 110, alignment: .leading)
+            Text(v).font(.system(size: 11.5)).foregroundColor(Tia.textDark)
         }
-        .background(Tia.paneHeader)
-        .overlay(Rectangle().frame(height: 0.7).foregroundColor(Tia.border), alignment: .bottom)
-    }
-
-    private func cell(_ text: String, _ width: CGFloat, bold: Bool = false) -> some View {
-        Text(text)
-            .font(.system(size: 11, weight: bold ? .semibold : .regular))
-            .frame(width: width, alignment: .leading)
-            .padding(.horizontal, 5).padding(.vertical, 3)
-            .lineLimit(1)
     }
 }

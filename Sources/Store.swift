@@ -26,7 +26,23 @@ final class ProjectStore: ObservableObject {
 
     func open(name: String) {
         guard let data = try? Data(contentsOf: fileURL(name)),
-              let p = try? JSONDecoder().decode(TiaProject.self, from: data) else { return }
+              var p = try? JSONDecoder().decode(TiaProject.self, from: data) else { return }
+        // v3 migration: HMI screens saved by v1/v2 used a 350x230 canvas;
+        // the KTP700 canvas is now 800x480 — scale old elements up once.
+        if var h = p.hmi {
+            let maxX = h.screens.flatMap { $0.elements }.map { $0.x + $0.w }.max() ?? 0
+            if maxX > 0 && maxX <= 360 {
+                for si in h.screens.indices {
+                    for ei in h.screens[si].elements.indices {
+                        h.screens[si].elements[ei].x *= 800.0 / 350.0
+                        h.screens[si].elements[ei].w *= 800.0 / 350.0
+                        h.screens[si].elements[ei].y *= 480.0 / 230.0
+                        h.screens[si].elements[ei].h *= 480.0 / 230.0
+                    }
+                }
+                p.hmi = h
+            }
+        }
         project = p
         touch(name)
     }
