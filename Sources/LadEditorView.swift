@@ -3,7 +3,7 @@ import SwiftUI
 // MARK: - LAD editor (v3 — built to the approved wireframe)
 //
 // Block interface on top, favorites bar, then the networks. Operand
-// labels are two lines: the %address in SF Mono Bold teal (#007B8A),
+// labels: the %address in SF Mono Bold teal (#007B8A) above the symbol,
 // the "name" in grey below it. Timer/counter boxes are #EFEFEF with a
 // header band and the instance name above the box. Online, a live wire
 // is solid green (#1E9E4A) and a dead wire dashed blue (#3A7BD5).
@@ -11,6 +11,8 @@ import SwiftUI
 // points (+) appear), then tap a favorite or a task-card instruction to
 // insert there. Double-tap toggles NO<->NC and cycles () -> S -> R.
 // Pinch zooms 50–200% with semantic levels; the HUD has a Fit button.
+// Part 2: the rung is drawn on one strict grid — thick rail, a stub of
+// exactly one cell, fixed cells, one centerline, output column aligned.
 
 struct LadEditorView: View {
     @Binding var device: PlcDevice
@@ -167,6 +169,33 @@ struct LadEditorView: View {
 
     // MARK: Network rendering
 
+    // MARK: Network rendering — strict grid geometry (Part 2)
+    //
+    // One fixed grid for every network: a thick left rail, then a wire
+    // stub of exactly one cell width, then elements in consecutive
+    // cells. Every element's input and output sit on the same
+    // centerline; wires are horizontal or vertical only and run glyph
+    // edge to glyph edge. The output element always lands in the same
+    // right-hand column (blockUnits). Labels are positioned around the
+    // glyph and never move the centerline.
+
+    private let cellW: CGFloat = 64
+    private let railW: CGFloat = 9
+
+    private func units(of el: LadElement) -> Int { isBox(el.kind) ? 2 : 1 }
+    private func netUnits(_ net: LadNetwork) -> Int {
+        net.series.reduce(0) { $0 + units(of: $1) } + units(of: net.output)
+    }
+    private var blockUnits: Int { max(1, block.networks.map(netUnits).max() ?? 1) }
+    private func colX(_ col: Int) -> CGFloat { railW + cellW + CGFloat(col) * cellW }
+    private var contentW: CGFloat { max(colX(blockUnits) + 14, 330) }
+    private func netHasBox(_ net: LadNetwork) -> Bool {
+        (net.series + net.parallel + [net.output]).contains { isBox($0.kind) }
+    }
+    private func rungH(_ net: LadNetwork) -> CGFloat { netHasBox(net) ? 108 : 78 }
+    private func wireY(_ net: LadNetwork) -> CGFloat { netHasBox(net) ? 46 : 36 }
+    private func flowColor(_ on: Bool) -> Color { live ? (on ? Tia.onlineTrue : Tia.onlineFalse) : Tia.wire }
+
     private func networkView(_ ni: Int, _ net: LadNetwork) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
@@ -184,192 +213,227 @@ struct LadEditorView: View {
             if showDetail && !net.comment.isEmpty {
                 Text(net.comment).font(.system(size: 10.5 * z).italic()).foregroundColor(.secondary)
             }
-            rungView(ni, net)
-            if !net.parallel.isEmpty {
-                parallelView(ni, net)
-            }
+            rungCanvas(ni, net)
         }
         .padding(6 * z)
-        .frame(width: 640 * z, alignment: .leading)
+        .frame(width: contentW * z, alignment: .leading)
         .background(selNet == ni ? Color(red: 0.97, green: 0.98, blue: 1.0) : Color.white)
         .overlay(RoundedRectangle(cornerRadius: 3).stroke(Tia.border.opacity(0.6), lineWidth: 0.7))
         .onTapGesture { selNet = ni }
     }
 
-    private func rungView(_ ni: Int, _ net: LadNetwork) -> some View {
+    private func rungCanvas(_ ni: Int, _ net: LadNetwork) -> some View {
+        let y = wireY(net)
+        let hasPar = !net.parallel.isEmpty
+        let by = y + 56
+        let canvasH = rungH(net) + (hasPar ? 56 : 0)
         let flows = flowStates(net)
-        return HStack(alignment: .top, spacing: 0) {
-            // power rail
+        let bFlows = branchFlowStates(net)
+        let seriesOut = flows.last ?? true
+        let branchOut = hasPar ? (bFlows.last ?? false) : false
+        let outCol = blockUnits - units(of: net.output)
+        var cols: [Int] = []
+        var c = 0
+        for el in net.series { cols.append(c); c += units(of: el) }
+        let seriesEnd = c
+        var bcols: [Int] = []
+        var bc = 0
+        for el in net.parallel { bcols.append(bc); bc += units(of: el) }
+        let branchEnd = bc
+        return ZStack(alignment: .topLeading) {
+            // thick left power rail
             Rectangle()
-                .fill(live ? (sim.running ? Tia.onlineTrue : Tia.onlineFalse) : Tia.wire)
-                .frame(width: 3.5 * z, height: 64 * z)
-                .padding(.trailing, 2)
+                .fill(live ? Tia.onlineTrue : Color(red: 0.16, green: 0.18, blue: 0.20))
+                .frame(width: railW * z, height: canvasH * z)
+            // stub: rail to first element, exactly one cell wide
+            hWire(x1: railW, x2: colX(0), y: y, on: true)
+            // gap wire: last series element to the output column
+            if outCol > seriesEnd {
+                hWire(x1: colX(seriesEnd), x2: colX(outCol) + (isBox(net.output.kind) ? 4 : 0), y: y, on: seriesOut)
+            }
+            if isBox(net.output.kind) && outCol == seriesEnd {
+                hWire(x1: colX(outCol), x2: colX(outCol) + 4, y: y, on: seriesOut || branchOut)
+            }
             ForEach(Array(net.series.enumerated()), id: \.element.id) { ei, el in
-                if showDetail && insNet == ni && insPos == ei {
-                    insertPoint { }
+                if isBox(el.kind) {
+                    hWire(x1: colX(cols[ei]), x2: colX(cols[ei]) + 4, y: y, on: flows[ei])
+                    hWire(x1: colX(cols[ei] + 2) - 4, x2: colX(cols[ei] + 2), y: y, on: flows[ei + 1])
                 }
-                wireSegment(on: flows[ei])
-                elementCell(ni, ei, el, parallel: false)
+                cellView(ni: ni, ei: ei, el: el, parallel: false, isOutput: false,
+                         colPt: colX(cols[ei]), rowTop: 0, rowH: rungH(net), cyLocal: y,
+                         inOn: flows[ei], outOn: flows[ei + 1])
             }
-            wireSegment(on: flows.last ?? true)
-            outputCell(ni, net.output)
-        }
-    }
-
-    private func parallelView(_ ni: Int, _ net: LadNetwork) -> some View {
-        HStack(alignment: .top, spacing: 0) {
-            Rectangle().fill(live ? Tia.onlineTrue : Tia.wire).frame(width: 3.5 * z, height: 30 * z)
-                .padding(.trailing, 2)
-            VStack(alignment: .leading, spacing: 0) {
-                Rectangle().fill(live ? Tia.onlineTrue : Tia.wire).frame(width: 30 * z, height: 1.6 * z)
-                HStack(alignment: .top, spacing: 0) {
-                    ForEach(Array(net.parallel.enumerated()), id: \.element.id) { ei, el in
-                        elementCell(ni, ei, el, parallel: true)
-                        wireSegment(on: live)
+            cellView(ni: ni, ei: -2, el: net.output, parallel: false, isOutput: true,
+                     colPt: colX(outCol), rowTop: 0, rowH: rungH(net), cyLocal: y,
+                     inOn: seriesOut || branchOut, outOn: seriesOut || branchOut)
+            if hasPar {
+                vWire(x: colX(0), y1: y, y2: by, on: true)
+                vWire(x: colX(outCol), y1: y, y2: by, on: branchOut)
+                junctionDot(x: colX(0), y: y, on: true)
+                junctionDot(x: colX(outCol), y: y, on: branchOut)
+                if branchEnd < outCol {
+                    hWire(x1: colX(branchEnd), x2: colX(outCol), y: by, on: branchOut)
+                }
+                ForEach(Array(net.parallel.enumerated()), id: \.element.id) { ei, el in
+                    if isBox(el.kind) {
+                        hWire(x1: colX(bcols[ei]), x2: colX(bcols[ei]) + 4, y: by, on: bFlows[ei])
+                        hWire(x1: colX(bcols[ei] + 2) - 4, x2: colX(bcols[ei] + 2), y: by, on: bFlows[ei + 1])
                     }
+                    cellView(ni: ni, ei: ei, el: el, parallel: true, isOutput: false,
+                             colPt: colX(bcols[ei]), rowTop: by - 28, rowH: 56, cyLocal: 28,
+                             inOn: bFlows[ei], outOn: bFlows[ei + 1])
                 }
             }
-            Spacer()
-        }
-        .padding(.leading, 6 * z)
-    }
-
-    private func wireSegment(on: Bool) -> some View {
-        let color: Color = live ? (on ? Tia.onlineTrue : Tia.onlineFalse) : Tia.wire
-        return ZStack {
-            if live && !on {
-                DashedLine().stroke(color, lineWidth: 1.6 * z)
-            } else {
-                Rectangle().fill(color).frame(height: 1.8 * z)
+            if showDetail && insNet == ni {
+                ForEach(0...net.series.count, id: \.self) { p in
+                    Image(systemName: "plus.circle.fill")
+                        .font(.system(size: 15 * z))
+                        .foregroundColor(Tia.accent)
+                        .position(x: colX(p < cols.count ? cols[p] : seriesEnd) * z, y: y * z)
+                }
             }
         }
-        .frame(width: 14 * z, height: 64 * z)
+        .frame(width: contentW * z, height: canvasH * z)
     }
 
-    private func insertPoint(action: @escaping () -> Void) -> some View {
-        Image(systemName: "plus.circle.fill")
-            .font(.system(size: 15 * z))
-            .foregroundColor(Tia.accent)
-            .frame(width: 16 * z, height: 64 * z)
+    @ViewBuilder
+    private func hWire(x1: CGFloat, x2: CGFloat, y: CGFloat, on: Bool) -> some View {
+        if x2 > x1 + 0.5 {
+            ZStack {
+                if live && !on {
+                    DashedLine().stroke(Tia.onlineFalse, lineWidth: 1.6 * z)
+                } else {
+                    Rectangle().fill(flowColor(on)).frame(height: 1.8 * z)
+                }
+            }
+            .frame(width: (x2 - x1) * z, height: 6 * z)
+            .offset(x: x1 * z, y: (y - 3) * z)
+        }
+    }
+
+    private func vWire(x: CGFloat, y1: CGFloat, y2: CGFloat, on: Bool) -> some View {
+        Rectangle().fill(flowColor(on))
+            .frame(width: 1.8 * z, height: (y2 - y1) * z)
+            .offset(x: (x - 0.9) * z, y: y1 * z)
+    }
+
+    private func junctionDot(x: CGFloat, y: CGFloat, on: Bool) -> some View {
+        Circle().fill(flowColor(on))
+            .frame(width: 5.5 * z, height: 5.5 * z)
+            .offset(x: (x - 2.75) * z, y: (y - 2.75) * z)
     }
 
     // MARK: Elements
 
     @ViewBuilder
-    private func elementCell(_ ni: Int, _ ei: Int, _ el: LadElement, parallel: Bool) -> some View {
-        let selected = selNet == ni && (parallel ? selParallel == ei : (selParallel == nil && selPos == ei))
-        VStack(spacing: 1) {
+    private func cellView(ni: Int, ei: Int, el: LadElement, parallel: Bool, isOutput: Bool,
+                          colPt: CGFloat, rowTop: CGFloat, rowH: CGFloat, cyLocal: CGFloat,
+                          inOn: Bool, outOn: Bool) -> some View {
+        let selected = selNet == ni && (isOutput
+            ? (selParallel == nil && selPos == -2)
+            : (parallel ? selParallel == ei : (selParallel == nil && selPos == ei)))
+        let wdt = CGFloat(units(of: el)) * cellW
+        ZStack(alignment: .topLeading) {
+            if selected {
+                RoundedRectangle(cornerRadius: 3).fill(Tia.selection)
+                    .frame(width: wdt * z, height: rowH * z)
+                RoundedRectangle(cornerRadius: 3).stroke(Tia.accent, lineWidth: 1)
+                    .frame(width: wdt * z, height: rowH * z)
+            }
             if isBox(el.kind) {
-                boxView(ni, ei, el, parallel: parallel)
+                boxCellContent(el, wdt: wdt, cy: cyLocal)
             } else {
-                operandLabel(el)
-                LadGlyph(kind: el.kind, color: Tia.wire, scale: z)
-                    .frame(width: 46 * z, height: 30 * z)
+                Text(addressOf(el.tag))
+                    .font(.system(size: 10.5 * z, weight: .bold, design: .monospaced))
+                    .foregroundColor(Tia.labelTeal)
+                    .position(x: wdt / 2 * z, y: (cyLocal - 17) * z)
+                LadGlyph(kind: el.kind, colorIn: flowColor(inOn), colorOut: flowColor(outOn), scale: z)
+                    .frame(width: wdt * z, height: 30 * z)
+                    .position(x: wdt / 2 * z, y: cyLocal * z)
+                Text(el.tag.isEmpty ? "\"???\"" : "\"\(el.tag)\"")
+                    .font(.system(size: 10 * z))
+                    .foregroundColor(Tia.nameGrey)
+                    .position(x: wdt / 2 * z, y: (cyLocal + 23) * z)
             }
         }
-        .padding(3 * z)
-        .background(selected ? Tia.selection : Color.clear)
-        .overlay(RoundedRectangle(cornerRadius: 3).stroke(selected ? Tia.accent : Color.clear, lineWidth: 1))
+        .frame(width: wdt * z, height: rowH * z)
+        .offset(x: colPt * z, y: rowTop * z)
         .contentShape(Rectangle())
-        .onTapGesture(count: 2) { toggleKind(ni, ei, parallel: parallel) }
+        .onTapGesture(count: 2) { toggleKind(ni, isOutput ? -2 : ei, parallel: parallel) }
         .onTapGesture {
             selNet = ni
-            if parallel { selParallel = ei; selPos = -1 } else { selParallel = nil; selPos = ei }
-            insNet = ni; insPos = ei + 1
+            if isOutput {
+                selParallel = nil; selPos = -2
+                insNet = ni; insPos = block.networks[ni].series.count
+            } else if parallel {
+                selParallel = ei; selPos = -1
+                insNet = ni; insPos = ei + 1
+            } else {
+                selParallel = nil; selPos = ei
+                insNet = ni; insPos = ei + 1
+            }
         }
         .onLongPressGesture {
             selNet = ni
-            if parallel { selParallel = ei; selPos = -1 } else { selParallel = nil; selPos = ei }
-            tagPickerFor = TagTarget(net: ni, pos: ei, parallel: parallel)
+            if isOutput { selParallel = nil; selPos = -2 }
+            else if parallel { selParallel = ei; selPos = -1 }
+            else { selParallel = nil; selPos = ei }
+            tagPickerFor = TagTarget(net: ni, pos: isOutput ? -2 : ei, parallel: parallel)
         }
     }
 
-    @ViewBuilder
-    private func outputCell(_ ni: Int, _ el: LadElement) -> some View {
-        let selected = selNet == ni && selParallel == nil && selPos == -2
-        VStack(spacing: 1) {
-            if isBox(el.kind) {
-                boxView(ni, -2, el, parallel: false)
-            } else {
-                operandLabel(el)
-                LadGlyph(kind: el.kind, color: Tia.wire, scale: z)
-                    .frame(width: 46 * z, height: 30 * z)
-            }
-        }
-        .padding(3 * z)
-        .background(selected ? Tia.selection : Color.clear)
-        .overlay(RoundedRectangle(cornerRadius: 3).stroke(selected ? Tia.accent : Color.clear, lineWidth: 1))
-        .contentShape(Rectangle())
-        .onTapGesture(count: 2) { toggleKind(ni, -2, parallel: false) }
-        .onTapGesture {
-            selNet = ni; selParallel = nil; selPos = -2
-            insNet = ni; insPos = block.networks[ni].series.count
-        }
-        .onLongPressGesture {
-            selNet = ni; selParallel = nil; selPos = -2
-            tagPickerFor = TagTarget(net: ni, pos: -2, parallel: false)
-        }
-    }
-
-    private func operandLabel(_ el: LadElement) -> some View {
-        VStack(spacing: 0) {
-            Text(addressOf(el.tag))
-                .font(.system(size: 10.5 * z, weight: .bold, design: .monospaced))
-                .foregroundColor(Tia.labelTeal)
-            Text(el.tag.isEmpty ? "\"???\"" : "\"\(el.tag)\"")
-                .font(.system(size: 10 * z))
-                .foregroundColor(Tia.nameGrey)
-        }
-        .frame(height: 26 * z)
-        .onTapGesture {
-            // label tap is handled by the cell (selection); the picker
-            // opens on long-press, as in the touch matrix.
-        }
-    }
-
-    private func boxView(_ ni: Int, _ ei: Int, _ el: LadElement, parallel: Bool) -> some View {
-        VStack(spacing: 1) {
+    private func boxCellContent(_ el: LadElement, wdt: CGFloat, cy: CGFloat) -> some View {
+        let bw = wdt - 8
+        let bh: CGFloat = isCounter(el.kind) ? 53 : 40
+        return ZStack(alignment: .topLeading) {
             Text(el.instance.isEmpty ? "???" : el.instance)
                 .font(.system(size: 9.5 * z)).foregroundColor(.secondary)
-            VStack(spacing: 0) {
-                Text(kindName(el.kind))
-                    .font(.system(size: 10.5 * z, weight: .bold)).foregroundColor(Tia.textDark)
-                    .frame(width: 92 * z, height: 15 * z)
-                    .background(Tia.boxHeader)
-                HStack {
-                    Text(isTimer(el.kind) ? "IN" : (el.kind == .ctu ? "CU" : "CD"))
-                        .font(.system(size: 9.5 * z)).foregroundColor(Tia.textDark)
-                    Spacer()
-                    Text("Q").font(.system(size: 9.5 * z)).foregroundColor(Tia.textDark)
-                    Circle()
-                        .fill((sim.values[el.tag] ?? false) && live ? Tia.onlineTrue : Color.gray.opacity(0.4))
-                        .frame(width: 7 * z, height: 7 * z)
-                }
-                .padding(.horizontal, 4 * z)
-                .frame(height: 14 * z)
-                HStack {
-                    Text(isTimer(el.kind) ? "PT" : "PV").font(.system(size: 9.5 * z)).foregroundColor(Tia.textDark)
-                    Spacer()
-                    Text(el.preset).font(.system(size: 9.5 * z, weight: .semibold, design: .monospaced)).foregroundColor(Tia.textDark)
-                }
-                .padding(.horizontal, 4 * z)
-                .frame(height: 14 * z)
-                if isCounter(el.kind) {
-                    HStack {
-                        Text("CV").font(.system(size: 9.5 * z)).foregroundColor(Tia.textDark)
-                        Spacer()
-                        Text("\(sim.counts[el.instance] ?? 0)")
-                            .font(.system(size: 9.5 * z, weight: .bold, design: .monospaced))
-                            .foregroundColor(live ? Tia.onlineTrue : Tia.textDark)
-                    }
-                    .padding(.horizontal, 4 * z)
-                    .frame(height: 14 * z)
-                }
-            }
-            .frame(width: 96 * z)
-            .background(Tia.boxFillV3)
-            .overlay(RoundedRectangle(cornerRadius: 2).stroke(Tia.wire, lineWidth: 0.9))
+                .position(x: wdt / 2 * z, y: (cy - bh / 2 - 7) * z)
+            boxBody(el)
+                .frame(width: bw * z, height: bh * z)
+                .position(x: wdt / 2 * z, y: cy * z)
         }
+    }
+
+    private func boxBody(_ el: LadElement) -> some View {
+        VStack(spacing: 0) {
+            Text(kindName(el.kind))
+                .font(.system(size: 10.5 * z, weight: .bold)).foregroundColor(Tia.textDark)
+                .frame(maxWidth: .infinity)
+                .frame(height: 14 * z)
+                .background(Tia.boxHeader)
+            HStack {
+                Text(isTimer(el.kind) ? "IN" : (el.kind == .ctu ? "CU" : "CD"))
+                    .font(.system(size: 9.5 * z)).foregroundColor(Tia.textDark)
+                Spacer()
+                Text("Q").font(.system(size: 9.5 * z)).foregroundColor(Tia.textDark)
+                Circle()
+                    .fill((sim.values[el.tag] ?? false) && live ? Tia.onlineTrue : Color.gray.opacity(0.4))
+                    .frame(width: 7 * z, height: 7 * z)
+            }
+            .padding(.horizontal, 4 * z)
+            .frame(height: 13 * z)
+            HStack {
+                Text(isTimer(el.kind) ? "PT" : "PV").font(.system(size: 9.5 * z)).foregroundColor(Tia.textDark)
+                Spacer()
+                Text(el.preset).font(.system(size: 9.5 * z, weight: .semibold, design: .monospaced)).foregroundColor(Tia.textDark)
+            }
+            .padding(.horizontal, 4 * z)
+            .frame(height: 13 * z)
+            if isCounter(el.kind) {
+                HStack {
+                    Text("CV").font(.system(size: 9.5 * z)).foregroundColor(Tia.textDark)
+                    Spacer()
+                    Text("\(sim.counts[el.instance] ?? 0)")
+                        .font(.system(size: 9.5 * z, weight: .bold, design: .monospaced))
+                        .foregroundColor(live ? Tia.onlineTrue : Tia.textDark)
+                }
+                .padding(.horizontal, 4 * z)
+                .frame(height: 13 * z)
+            }
+        }
+        .background(Tia.boxFillV3)
+        .overlay(RoundedRectangle(cornerRadius: 2).stroke(Tia.wire, lineWidth: 0.9))
     }
 
     // MARK: Floating action strip (selection)
@@ -554,28 +618,58 @@ struct LadEditorView: View {
         states.append(power)
         return states
     }
+
+    /// Prefix power flow through the parallel branch, same rule as the
+    /// series rung (the branch is fed from the left junction).
+    private func branchFlowStates(_ net: LadNetwork) -> [Bool] {
+        guard live else { return Array(repeating: true, count: net.parallel.count + 1) }
+        var states: [Bool] = []
+        var power = true
+        for el in net.parallel {
+            states.append(power)
+            switch el.kind {
+            case .notOp: power = !power
+            case .contactNC: power = power && !(sim.values[el.tag] ?? false)
+            default: power = power && (sim.values[el.tag] ?? false)
+            }
+        }
+        states.append(power)
+        return states
+    }
 }
 
 // MARK: - Glyphs & dashed wire
 
 struct LadGlyph: View {
     var kind: LadElementKind
-    var color: Color
+    var colorIn: Color
+    var colorOut: Color
     var scale: CGFloat = 1
     var body: some View {
         GeometryReader { g in
             let w = g.size.width, h = g.size.height, mid = h / 2
             let lw: CGFloat = 1.8 * scale
+            // Stub ends: the wire runs from each cell edge to the symbol
+            // edge exactly — the symbol never bridges its own gap.
+            let a: CGFloat, b: CGFloat
+            switch kind {
+            case .coil, .coilSet, .coilReset: a = w * 0.25; b = w * 0.75
+            case .notOp: a = w * 0.19; b = w * 0.81
+            default: a = w * 0.36; b = w * 0.64
+            }
             ZStack {
                 Path { p in
-                    p.move(to: CGPoint(x: 0, y: mid)); p.addLine(to: CGPoint(x: w, y: mid))
-                }.stroke(color, lineWidth: lw)
+                    p.move(to: CGPoint(x: 0, y: mid)); p.addLine(to: CGPoint(x: a, y: mid))
+                }.stroke(colorIn, lineWidth: lw)
+                Path { p in
+                    p.move(to: CGPoint(x: b, y: mid)); p.addLine(to: CGPoint(x: w, y: mid))
+                }.stroke(colorOut, lineWidth: lw)
                 switch kind {
                 case .contactNO, .pTrig, .nTrig:
                     Path { p in
-                        p.move(to: CGPoint(x: w * 0.32, y: mid - h * 0.34)); p.addLine(to: CGPoint(x: w * 0.32, y: mid + h * 0.34))
-                        p.move(to: CGPoint(x: w * 0.68, y: mid - h * 0.34)); p.addLine(to: CGPoint(x: w * 0.68, y: mid + h * 0.34))
-                    }.stroke(color, lineWidth: lw)
+                        p.move(to: CGPoint(x: a, y: mid - h * 0.34)); p.addLine(to: CGPoint(x: a, y: mid + h * 0.34))
+                        p.move(to: CGPoint(x: b, y: mid - h * 0.34)); p.addLine(to: CGPoint(x: b, y: mid + h * 0.34))
+                    }.stroke(colorOut, lineWidth: lw)
                     if kind != .contactNO {
                         Text(kind == .pTrig ? "P" : "N")
                             .font(.system(size: 11 * scale, weight: .bold))
@@ -584,15 +678,15 @@ struct LadGlyph: View {
                     }
                 case .contactNC:
                     Path { p in
-                        p.move(to: CGPoint(x: w * 0.32, y: mid - h * 0.34)); p.addLine(to: CGPoint(x: w * 0.32, y: mid + h * 0.34))
-                        p.move(to: CGPoint(x: w * 0.68, y: mid - h * 0.34)); p.addLine(to: CGPoint(x: w * 0.68, y: mid + h * 0.34))
+                        p.move(to: CGPoint(x: a, y: mid - h * 0.34)); p.addLine(to: CGPoint(x: a, y: mid + h * 0.34))
+                        p.move(to: CGPoint(x: b, y: mid - h * 0.34)); p.addLine(to: CGPoint(x: b, y: mid + h * 0.34))
                         p.move(to: CGPoint(x: w * 0.24, y: mid + h * 0.30)); p.addLine(to: CGPoint(x: w * 0.76, y: mid - h * 0.30))
-                    }.stroke(color, lineWidth: lw)
+                    }.stroke(colorOut, lineWidth: lw)
                 case .coil, .coilSet, .coilReset:
                     Path { p in
-                        p.addArc(center: CGPoint(x: w * 0.40, y: mid), radius: h * 0.30, startAngle: .degrees(90), endAngle: .degrees(270), clockwise: false)
-                        p.addArc(center: CGPoint(x: w * 0.60, y: mid), radius: h * 0.30, startAngle: .degrees(270), endAngle: .degrees(90), clockwise: false)
-                    }.stroke(color, lineWidth: lw)
+                        p.addArc(center: CGPoint(x: w * 0.42, y: mid), radius: w * 0.17, startAngle: .degrees(90), endAngle: .degrees(270), clockwise: false)
+                        p.addArc(center: CGPoint(x: w * 0.58, y: mid), radius: w * 0.17, startAngle: .degrees(270), endAngle: .degrees(90), clockwise: false)
+                    }.stroke(colorOut, lineWidth: lw)
                     if kind != .coil {
                         Text(kind == .coilSet ? "S" : "R")
                             .font(.system(size: 10 * scale, weight: .bold))
@@ -600,7 +694,7 @@ struct LadGlyph: View {
                             .position(x: w * 0.5, y: mid)
                     }
                 case .notOp:
-                    RoundedRectangle(cornerRadius: 2).stroke(color, lineWidth: lw)
+                    RoundedRectangle(cornerRadius: 2).stroke(colorOut, lineWidth: lw)
                         .frame(width: w * 0.62, height: h * 0.62)
                         .position(x: w * 0.5, y: mid)
                     Text("NOT").font(.system(size: 8.5 * scale, weight: .bold))

@@ -22,6 +22,14 @@ final class Simulator: ObservableObject {
     private var counterKind: [String: LadElementKind] = [:]
     private var counterPV: [String: Int] = [:]
     private var edgePrev: [String: Bool] = [:]
+    // Part 1 fix: separate input layers. The scan freezes an input image =
+    // PLCSIM switch OR HMI write; HMI "true" writes are pulse-stretched so
+    // a tap shorter than one scan is never lost.
+    private var physBits: [String: Bool] = [:]
+    private var hmiBits: [String: Bool] = [:]
+    private var hmiPulse: Set<String> = []
+    private var hmiSeen: Set<String> = []
+    private(set) var inputImage: [String: Bool] = [:]
     private var timer: Timer?
     private var device: PlcDevice?
 
@@ -34,6 +42,7 @@ final class Simulator: ObservableObject {
         values = [:]; counts = [:]
         tonElapsed = [:]; timerQ = [:]; timerLastIN = [:]; tpActive = [:]
         ctuCV = [:]; ctuLastCU = [:]; counterKind = [:]; counterPV = [:]; edgePrev = [:]
+        physBits = [:]; hmiBits = [:]; hmiPulse = []; hmiSeen = []; inputImage = [:]
         if let d = device { for t in d.tags { values[t.name] = false } }
     }
 
@@ -54,16 +63,33 @@ final class Simulator: ObservableObject {
     }
     private func stopTimer() { timer?.invalidate(); timer = nil }
 
-    func setInput(_ tag: String, _ v: Bool) {
-        print("[DEBUG-LOG] PLCSIM setInput \(tag) = \(v)") // DEBUG-LOG (temporary, Part 1 diagnosis)
-        values[tag] = v
+    /// Resolve a tag name OR an address (%I0.0) to the tag's name.
+    private func resolve(_ tagOrAddress: String) -> String {
+        guard let d = device else { return tagOrAddress }
+        if d.tags.contains(where: { $0.name == tagOrAddress }) { return tagOrAddress }
+        return d.tags.first { $0.address == tagOrAddress }?.name ?? tagOrAddress
     }
 
-    /// HMI write entry point. Part 1 diagnosis: currently forwards to the
-    /// same shared values slot as PLCSIM — no separate layer, no freeze.
+    private func publishMerged(_ name: String) {
+        values[name] = (physBits[name] ?? false) || (hmiBits[name] ?? false)
+    }
+
+    /// PLCSIM switch / SIM-table write (level-held).
+    func setInput(_ tag: String, _ v: Bool) {
+        let name = resolve(tag)
+        physBits[name] = v
+        publishMerged(name)
+    }
+
+    /// HMI write (momentary buttons, I/O fields). A true write released
+    /// before any scan has frozen it is held for exactly one more scan.
     func setHMIInput(_ tag: String, _ v: Bool) {
-        print("[DEBUG-LOG] HMI setHMIInput \(tag) = \(v)") // DEBUG-LOG (temporary, Part 1 diagnosis)
-        values[tag] = v
+        let name = resolve(tag)
+        if v { hmiSeen.remove(name) }
+        else if (hmiBits[name] ?? false) && !hmiSeen.contains(name) { hmiPulse.insert(name) }
+        if !v { hmiSeen.remove(name) }
+        hmiBits[name] = v
+        publishMerged(name)
     }
 
     /// One synchronous scan, for tests and single-stepping.
@@ -75,9 +101,15 @@ final class Simulator: ObservableObject {
 
     private func scan() {
         guard let d = device, let main = d.blocks.first(where: { $0.type == "OB" }) else { return }
-        // DEBUG-LOG (temporary, Part 1 diagnosis): what the scan actually samples
-        let sampled = d.tags.filter { $0.address.hasPrefix("%I") }.map { "\($0.name)=\(values[$0.name] ?? false)" }.joined(separator: " ")
-        print("[DEBUG-LOG] scan samples inputs: \(sampled)")
+        // Freeze the input image for the whole scan: PLCSIM switch OR HMI
+        // write (plus a pulse-stretched HMI true not yet seen by any scan).
+        for t in d.tags where t.address.hasPrefix("%I") {
+            let img = (physBits[t.name] ?? false) || (hmiBits[t.name] ?? false) || hmiPulse.contains(t.name)
+            inputImage[t.name] = img
+            values[t.name] = img
+            if hmiBits[t.name] ?? false { hmiSeen.insert(t.name) }
+            hmiPulse.remove(t.name)
+        }
         let dt = 0.1
         for net in main.networks {
             var power = true
@@ -101,17 +133,24 @@ final class Simulator: ObservableObject {
         counts = ctuCV
     }
 
+    /// Read a bit the way the running scan sees it: inputs come from the
+    /// frozen input image, everything else from the value table.
+    private func bit(_ tag: String) -> Bool {
+        if let img = inputImage[tag] { return img }
+        return values[tag] ?? false
+    }
+
     private func elementValue(_ el: LadElement) -> Bool {
         switch el.kind {
-        case .contactNO: return values[el.tag] ?? false
-        case .contactNC: return !(values[el.tag] ?? false)
+        case .contactNO: return bit(el.tag)
+        case .contactNC: return !bit(el.tag)
         case .pTrig:
-            let cur = values[el.tag] ?? false
+            let cur = bit(el.tag)
             let prev = edgePrev[el.id.uuidString] ?? false
             edgePrev[el.id.uuidString] = cur
             return cur && !prev
         case .nTrig:
-            let cur = values[el.tag] ?? false
+            let cur = bit(el.tag)
             let prev = edgePrev[el.id.uuidString] ?? false
             edgePrev[el.id.uuidString] = cur
             return !cur && prev
@@ -176,7 +215,7 @@ final class Simulator: ObservableObject {
         counterKind[el.instance] = el.kind
         counterPV[el.instance] = el.presetValue
         if el.kind == .ctd && ctuCV[el.instance] == nil { ctuCV[el.instance] = el.presetValue }
-        let cu = el.inputTag.isEmpty ? cuPower : (values[el.inputTag] ?? false)
+        let cu = el.inputTag.isEmpty ? cuPower : bit(el.inputTag)
         let last = ctuLastCU[el.instance] ?? false
         if cu && !last {
             if el.kind == .ctd { ctuCV[el.instance] = (ctuCV[el.instance] ?? el.presetValue) - 1 }
