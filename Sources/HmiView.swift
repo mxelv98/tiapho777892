@@ -116,7 +116,7 @@ struct HmiEditorView: View {
                 .foregroundColor(.white)
                 .padding(.horizontal, 10).padding(.vertical, 5)
                 .background(Tia.runGreen)
-                .clipShape(RoundedRectangle(cornerRadius: 4))
+                .clipShape(RoundedRectangle(cornerRadius: 9))
             }
             .buttonStyle(.plain)
         }
@@ -138,8 +138,8 @@ struct HmiEditorView: View {
                         .foregroundColor(armed == t.kind ? .white : Tia.textDark)
                         .padding(.horizontal, 8).padding(.vertical, 5)
                         .background(armed == t.kind ? Tia.accent : Color.white)
-                        .overlay(RoundedRectangle(cornerRadius: 3).stroke(Tia.border, lineWidth: 0.6))
-                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Tia.border.opacity(0.6), lineWidth: 0.6))
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
                     }
                     .buttonStyle(.plain)
                 }
@@ -151,8 +151,8 @@ struct HmiEditorView: View {
                     .foregroundColor(armed == .symbol ? .white : Tia.textDark)
                     .padding(.horizontal, 8).padding(.vertical, 5)
                     .background(armed == .symbol ? Tia.accent : Color.white)
-                    .overlay(RoundedRectangle(cornerRadius: 3).stroke(Tia.border, lineWidth: 0.6))
-                    .clipShape(RoundedRectangle(cornerRadius: 3))
+                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(Tia.border.opacity(0.6), lineWidth: 0.6))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
                 }
                 .buttonStyle(.plain)
                 if armed != nil {
@@ -161,9 +161,8 @@ struct HmiEditorView: View {
             }
             .padding(.horizontal, 6)
         }
-        .frame(height: 40)
-        .background(Tia.pane)
-        .overlay(Rectangle().frame(height: 0.7).foregroundColor(Tia.border), alignment: .bottom)
+        .frame(height: 42)
+        .background(Color.white)
     }
 
     private var toolbox: [(kind: HmiElementKind, label: String, icon: String)] {
@@ -1324,6 +1323,9 @@ struct HmiRuntimeView: View {
                 .padding(.horizontal, 8)
                 .frame(height: 22)
                 .background(first.alarmClass == "Errors" ? Tia.errorRed : Color.orange)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
             }
             GeometryReader { geo in
                 let s = min(geo.size.width / 800, geo.size.height / 480)

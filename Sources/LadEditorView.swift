@@ -84,7 +84,7 @@ struct LadEditorView: View {
                             .onEnded { _ in pinchStart = nil }
                     )
                 }
-                .background(Color.white)
+                .background(Tia.pane)
                 .overlay(alignment: .bottomTrailing) {
                     ZoomHUD(zoom: $zoom) { fit(geo.size.width) }
                         .padding(8)
@@ -94,7 +94,7 @@ struct LadEditorView: View {
                 }
             }
         }
-        .background(Color.white)
+        .background(Tia.pane)
         .onChange(of: insertRequest) { kind in
             if let kind { insert(kind); insertRequest = nil }
         }
@@ -180,9 +180,10 @@ struct LadEditorView: View {
                             Text(f.glyph)
                                 .font(.system(size: 12, weight: .bold, design: .monospaced))
                                 .foregroundColor(Tia.textDark)
-                                .frame(width: 42, height: 28)
+                                .frame(width: 44, height: 30)
                                 .background(Color.white)
-                                .overlay(RoundedRectangle(cornerRadius: 3).stroke(Tia.border, lineWidth: 0.7))
+                                .overlay(RoundedRectangle(cornerRadius: 9).stroke(Tia.border.opacity(0.7), lineWidth: 0.7))
+                                .clipShape(RoundedRectangle(cornerRadius: 9))
                         }
                         .buttonStyle(.plain)
                     }
@@ -190,9 +191,8 @@ struct LadEditorView: View {
                 .padding(.horizontal, 6)
             }
         }
-        .frame(height: 36)
-        .background(Tia.pane)
-        .overlay(Rectangle().frame(height: 0.7).foregroundColor(Tia.border), alignment: .bottom)
+        .frame(height: 38)
+        .background(Color.white)
     }
 
     private var favorites: [(kind: LadElementKind, glyph: String)] {
@@ -258,8 +258,10 @@ struct LadEditorView: View {
         }
         .padding(6 * z)
         .frame(width: contentW * z, alignment: .leading)
-        .background(selNet == ni ? Color(red: 0.97, green: 0.98, blue: 1.0) : Color.white)
-        .overlay(RoundedRectangle(cornerRadius: 3).stroke(Tia.border.opacity(0.6), lineWidth: 0.7))
+        .background(selNet == ni ? Tia.selection.opacity(0.45) : Color.white)
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(selNet == ni ? Tia.accent : Tia.border.opacity(0.5), lineWidth: selNet == ni ? 1.2 : 0.7))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .shadow(color: .black.opacity(0.06), radius: 4, y: 1.5)
         // No tap gesture here: a network-level recognizer fought the
         // title TextField and the cells (focus/selection sticking).
         // Network selection happens on the canvas background and cells.
@@ -637,9 +639,9 @@ struct LadEditorView: View {
             .padding(4)
         }
         .background(Color.white)
-        .overlay(RoundedRectangle(cornerRadius: 5).stroke(Tia.border, lineWidth: 0.8))
-        .clipShape(RoundedRectangle(cornerRadius: 5))
-        .shadow(color: .black.opacity(0.15), radius: 3, y: 1)
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Tia.border.opacity(0.5), lineWidth: 0.7))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .shadow(color: .black.opacity(0.13), radius: 5, y: 2)
     }
 
     private func stripButton(_ label: String, _ icon: String, action: @escaping () -> Void) -> some View {

@@ -1,8 +1,9 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// TIA Portal "Portal view" — the start screen, laid out like the real one:
-/// task list on the left, first steps + recent projects in the middle.
+/// Portal view — v5.0 skin: the same start screen and logic, redrawn with
+/// the iPhone touch from the approved mockups (frosted header, task card,
+/// projects as rounded cards). All store calls are unchanged.
 struct PortalView: View {
     @EnvironmentObject var store: ProjectStore
     @State private var showCreate = false
@@ -16,12 +17,20 @@ struct PortalView: View {
             HStack(spacing: 10) {
                 Wordmark(large: true)
                 Spacer()
+                Button { showImporter = true } label: {
+                    Label("Import file", systemImage: "square.and.arrow.down")
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12).padding(.vertical, 7)
+                        .background(Tia.accent)
+                        .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
                 Text("Portal view").font(.system(size: 12)).foregroundColor(.secondary)
             }
             .padding(14)
-            .background(Tia.pane)
-            Divider()
-            HStack(spacing: 0) {
+            .background(Tia.paneHeader)
+            HStack(spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Start").font(.system(size: 12, weight: .semibold)).padding(.bottom, 4)
                     portalTask("Create new project", "plus.square", "create")
@@ -36,8 +45,7 @@ struct PortalView: View {
                 }
                 .padding(10)
                 .frame(width: 210, alignment: .leading)
-                .background(Tia.pane)
-                Divider()
+                .tiaCard()
                 VStack(alignment: .leading, spacing: 8) {
                     if selected == "create" {
                         Text("Create new project").font(.system(size: 15, weight: .semibold))
@@ -72,16 +80,13 @@ struct PortalView: View {
                             .font(.system(size: 11)).foregroundColor(.secondary)
                     } else if selected == "about" {
                         Text("Installed software").font(.system(size: 15, weight: .semibold))
-                        Text("Tia Phone 1.0 — a training replica of the TIA Portal V16 interface.\nIt does not connect to real PLCs and does not replace TIA Portal.")
+                        Text("Tia Phone — a training replica of the TIA Portal V16 interface.\nIt does not connect to real PLCs and does not replace TIA Portal.")
                             .font(.system(size: 12.5))
                     } else {
-                        Text("Open existing project").font(.system(size: 15, weight: .semibold))
                         HStack {
-                            Text("Recent projects").font(.system(size: 12, weight: .semibold)).foregroundColor(.secondary)
+                            Text("Recent projects").font(.system(size: 15, weight: .semibold))
                             Spacer()
-                            Button { showImporter = true } label: {
-                                Label("Import file", systemImage: "square.and.arrow.down").font(.system(size: 12))
-                            }
+                            Text("\(store.recents.count) projects").font(.system(size: 11.5)).foregroundColor(.secondary)
                         }
                         if !importNote.isEmpty {
                             Text(importNote).font(.system(size: 11.5)).foregroundColor(Tia.accent)
@@ -89,42 +94,64 @@ struct PortalView: View {
                         if store.recents.isEmpty {
                             Text("No projects yet.").foregroundColor(.secondary)
                         }
-                        ForEach(store.recents, id: \.self) { name in
-                            HStack {
-                                Image(systemName: "doc.richtext").foregroundColor(Tia.accent)
-                                VStack(alignment: .leading, spacing: 0) {
-                                    Text(name).font(.system(size: 13, weight: .medium))
-                                    Text("Documents/Projects/\(name)").font(.system(size: 10.5)).foregroundColor(.secondary)
-                                }
-                                Spacer()
-                                if let p = store.loadProject(name: name), let url = store.exportURL(p) {
-                                    ShareLink(item: url) { Image(systemName: "square.and.arrow.up") }
-                                        .foregroundColor(Tia.accent)
-                                }
-                                Button("Open") { store.open(name: name) }
-                                Button(role: .destructive) { store.delete(name: name) } label: { Image(systemName: "trash") }
+                        LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+                            ForEach(store.recents, id: \.self) { name in
+                                projectCard(name)
                             }
-                            .padding(8)
-                            .background(Color.white)
-                            .overlay(RoundedRectangle(cornerRadius: 4).stroke(Tia.border, lineWidth: 0.7))
                         }
                     }
                     Spacer()
                 }
                 .padding(12)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.white)
             }
+            .padding(10)
         }
         .background(Tia.pane)
         .sheet(isPresented: $showCreate) { EmptyView() }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.json]) { result in
             if case .success(let url) = result, let name = store.importProject(from: url) {
                 importNote = "Imported \(name) — tap Open to start it."
+                selected = "open"
             } else {
                 importNote = "That file is not a Tia Phone project."
             }
         }
+    }
+
+    private func projectCard(_ name: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Tia.selection)
+                    .frame(width: 42, height: 42)
+                    .overlay(Image(systemName: "doc.richtext").font(.system(size: 19)).foregroundColor(Tia.accent))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(name).font(.system(size: 13.5, weight: .semibold)).lineLimit(1)
+                    Text("Documents/Projects").font(.system(size: 10)).foregroundColor(.secondary)
+                }
+                Spacer()
+            }
+            HStack(spacing: 8) {
+                Button { store.open(name: name) } label: {
+                    Text("Open").font(.system(size: 12, weight: .semibold)).foregroundColor(.white)
+                        .padding(.horizontal, 14).padding(.vertical, 5)
+                        .background(Tia.accent).clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                Spacer()
+                if let p = store.loadProject(name: name), let url = store.exportURL(p) {
+                    ShareLink(item: url) { Image(systemName: "square.and.arrow.up").font(.system(size: 13)) }
+                        .foregroundColor(Tia.accent)
+                }
+                Button(role: .destructive) { store.delete(name: name) } label: {
+                    Image(systemName: "trash").font(.system(size: 13))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(10)
+        .tiaCard()
     }
 
     private func portalTask(_ title: String, _ icon: String, _ key: String) -> some View {
@@ -137,8 +164,9 @@ struct PortalView: View {
                 Text(title).font(.system(size: 12.5))
                 Spacer()
             }
-            .padding(.vertical, 5).padding(.horizontal, 6)
+            .padding(.vertical, 6).padding(.horizontal, 8)
             .background(selected == key ? Tia.selection : Color.clear)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

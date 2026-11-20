@@ -4,14 +4,19 @@ import SwiftUI
 // light panes, dark text, light-blue selection, petrol accent,
 // near-black status bar, orange title/breadcrumb bar in online mode.
 enum Tia {
-    static let pane = Color(red: 0.93, green: 0.93, blue: 0.94)
-    static let paneHeader = Color(red: 0.88, green: 0.89, blue: 0.91)
-    static let border = Color(red: 0.66, green: 0.68, blue: 0.72)
-    static let selection = Color(red: 0.78, green: 0.89, blue: 1.0)      // tree/list selection #C7E3FF
-    static let accent = Color(red: 0.0, green: 0.36, blue: 0.48)         // TIA petrol blue
-    static let titleBar = Color(red: 0.96, green: 0.96, blue: 0.97)      // menu bar is light in V16
+    // v5.0 — iPhone-touch palette: soft warm-grey surfaces, white cards,
+    // teal-green accent, hairlines instead of hard borders. The layout
+    // metrics stay the approved wireframes; only the skin changed.
+    static let pane = Color(red: 0.945, green: 0.955, blue: 0.955)
+    static let paneHeader = Color(red: 0.985, green: 0.99, blue: 0.99)
+    static let border = Color(red: 0.83, green: 0.85, blue: 0.86)
+    static let selection = Color(red: 0.83, green: 0.93, blue: 0.91)     // light teal tint
+    static let accent = Color(red: 0.0, green: 0.52, blue: 0.47)         // teal-green (mockups)
+    static let titleBar = Color(red: 0.985, green: 0.99, blue: 0.99)     // near-white menu bar
     static let editorBG = Color.white
-    static let networkBar = Color(red: 0.90, green: 0.91, blue: 0.93)
+    static let networkBar = Color(red: 0.96, green: 0.97, blue: 0.97)
+    static let card = Color.white
+    static let cardRadius: CGFloat = 14
     static let online = Color(red: 1.0, green: 0.55, blue: 0.0)          // TIA online orange
     static let runGreen = Color(red: 0.13, green: 0.62, blue: 0.24)
     static let errorRed = Color(red: 0.85, green: 0.15, blue: 0.12)
@@ -21,12 +26,12 @@ enum Tia {
     static let cpuDark = Color(red: 0.23, green: 0.28, blue: 0.33)       // CPU body
     static let siemensTeal = Color(red: 0.0, green: 0.62, blue: 0.58)    // SIEMENS label / operand address teal
     static let textDark = Color(red: 0.10, green: 0.10, blue: 0.11)
-    static let boxFill = Color(red: 0.93, green: 0.94, blue: 0.96)       // TON/CTU box fill
+    static let boxFill = Color(red: 0.95, green: 0.96, blue: 0.97)       // TON/CTU box fill
     static let fontSize: CGFloat = 12
     // v2 aliases used by the newer editors
-    static let toolbar = Color(red: 0.95, green: 0.95, blue: 0.96)
-    static let headerBand = Color(red: 0.90, green: 0.91, blue: 0.93)
-    static let boxHeader = Color(red: 0.85, green: 0.87, blue: 0.90)
+    static let toolbar = Color(red: 0.97, green: 0.98, blue: 0.98)
+    static let headerBand = Color(red: 0.93, green: 0.95, blue: 0.95)
+    static let boxHeader = Color(red: 0.90, green: 0.93, blue: 0.93)
     static let tealText = Color(red: 0.0, green: 0.45, blue: 0.55)
     static let wire = Color(red: 0.15, green: 0.15, blue: 0.16)
     // v3 wireframe tokens (from the approved design sheets)
@@ -43,12 +48,11 @@ struct PaneHeader: View {
     let title: String
     var body: some View {
         HStack {
-            Text(title).font(.system(size: 11, weight: .semibold)).foregroundColor(Tia.textDark)
+            Text(title).font(.system(size: 12, weight: .semibold)).foregroundColor(Tia.textDark)
             Spacer()
         }
-        .padding(.horizontal, 6).padding(.vertical, 3)
+        .padding(.horizontal, 8).padding(.vertical, 4)
         .background(Tia.paneHeader)
-        .overlay(Rectangle().frame(height: 0.7).foregroundColor(Tia.border), alignment: .bottom)
     }
 }
 
@@ -63,9 +67,9 @@ struct ToolbarGlyph: View {
                 Image(systemName: system).font(.system(size: 15)).foregroundColor(active ? Tia.accent : Tia.textDark)
                 Text(label).font(.system(size: 8.5)).lineLimit(1).foregroundColor(Tia.textDark)
             }
-            .frame(width: 52, height: 34)
+            .frame(width: 52, height: 38)
             .background(active ? Tia.selection : Color.clear)
-            .overlay(RoundedRectangle(cornerRadius: 3).stroke(active ? Tia.accent : Color.clear, lineWidth: 1))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -76,6 +80,14 @@ extension View {
     func tiaPane() -> some View {
         background(Tia.pane)
             .overlay(Rectangle().frame(width: 0.7).foregroundColor(Tia.border), alignment: .leading)
+    }
+
+    /// v5.0 card skin: white, generously rounded, soft shadow, hairline edge.
+    func tiaCard(radius: CGFloat = Tia.cardRadius) -> some View {
+        background(Tia.card)
+            .clipShape(RoundedRectangle(cornerRadius: radius))
+            .overlay(RoundedRectangle(cornerRadius: radius).stroke(Tia.border.opacity(0.45), lineWidth: 0.6))
+            .shadow(color: .black.opacity(0.07), radius: 5, x: 0, y: 1.5)
     }
 }
 
@@ -180,9 +192,8 @@ struct ZoomHUD: View {
         }
         .foregroundColor(Tia.textDark)
         .background(Color.white)
-        .overlay(RoundedRectangle(cornerRadius: 4).stroke(Tia.border, lineWidth: 0.8))
-        .clipShape(RoundedRectangle(cornerRadius: 4))
-        .shadow(color: .black.opacity(0.12), radius: 2, y: 1)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .shadow(color: .black.opacity(0.14), radius: 4, y: 1)
     }
 }
 
