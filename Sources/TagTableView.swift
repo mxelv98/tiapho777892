@@ -28,6 +28,7 @@ struct TagTableView: View {
                 Spacer()
             }
             .background(Tia.paneHeader)
+            ScrollView(.horizontal, showsIndicators: false) {
             ScrollView {
                 VStack(spacing: 0) {
                     ForEach($device.tags) { $tag in
@@ -51,6 +52,8 @@ struct TagTableView: View {
                         Divider()
                     }
                 }
+                .frame(minWidth: 640)
+            }
             }
             .background(Color.white)
         }

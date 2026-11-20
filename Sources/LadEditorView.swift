@@ -120,8 +120,9 @@ struct LadEditorView: View {
     }
 
     private func rungRow(_ ni: Int, elements: [LadElement], output: LadElement?, isBranch: Bool) -> some View {
-        HStack(alignment: .top, spacing: 0) {
-            Rectangle().fill(Color.black).frame(width: 2, height: 46)
+        let rail = sim.powered ? Tia.runGreen : Color.black
+        return HStack(alignment: .top, spacing: 0) {
+            Rectangle().fill(rail).frame(width: 2, height: 58)
             wire
             ForEach(elements) { el in
                 elementView(ni, el, isOutput: false)
@@ -130,18 +131,19 @@ struct LadEditorView: View {
             if let out = output {
                 elementView(ni, out, isOutput: true)
                 wire
-                Rectangle().fill(Color.black).frame(width: 2, height: 46)
+                Rectangle().fill(rail).frame(width: 2, height: 58)
             }
         }
     }
 
-    private var wire: some View { Rectangle().fill(Color.black).frame(width: 12, height: 1.6).padding(.top, 22) }
+    private var wire: some View {
+        Rectangle().fill(sim.powered ? Tia.runGreen : Color.black).frame(width: 12, height: 1.6).padding(.top, 34)
+    }
 
     @ViewBuilder private func elementView(_ ni: Int, _ el: LadElement, isOutput: Bool) -> some View {
         let live = sim.powered && (sim.values[el.tag] ?? false)
         VStack(spacing: 1) {
-            Text(el.kind == .ton || el.kind == .ctu ? el.instance : el.tag)
-                .font(.system(size: 9.5)).foregroundColor(Tia.accent).lineLimit(1).frame(height: 12)
+            labelView(el)
             Group {
                 switch el.kind {
                 case .contactNO: contactShape(nc: false, live: live)
@@ -157,6 +159,24 @@ struct LadEditorView: View {
         .onTapGesture {
             selectedNetwork = ni
             editing = (ni, el.id, isOutput)
+        }
+    }
+
+    /// Operand label the way TIA draws it: address in teal bold above,
+    /// symbolic name in quotes below it; instance name above a box.
+    @ViewBuilder private func labelView(_ el: LadElement) -> some View {
+        if el.kind == .ton || el.kind == .ctu {
+            Text(el.instance)
+                .font(.system(size: 9.5, weight: .semibold)).foregroundColor(Tia.textDark)
+                .lineLimit(1).frame(height: 12)
+        } else {
+            VStack(spacing: 0) {
+                Text(device.tags.first(where: { $0.name == el.tag })?.address ?? "")
+                    .font(.system(size: 8.5, weight: .bold)).foregroundColor(Tia.siemensTeal).lineLimit(1)
+                Text(el.tag.isEmpty ? "???" : "\"\(el.tag)\"")
+                    .font(.system(size: 9.5)).foregroundColor(Tia.textDark).lineLimit(1)
+            }
+            .frame(height: 24)
         }
     }
 
@@ -202,26 +222,29 @@ struct LadEditorView: View {
     private func boxShape(_ el: LadElement, live: Bool) -> some View {
         VStack(spacing: 0) {
             HStack {
-                Text(el.kind == .ton ? "TON" : "CTU").font(.system(size: 9, weight: .bold))
+                Text(el.kind == .ton ? "TON" : "CTU").font(.system(size: 9, weight: .bold)).foregroundColor(Tia.textDark)
                 Spacer()
                 Text(el.kind == .ton ? "Time" : "Counter").font(.system(size: 7.5)).foregroundColor(.secondary)
             }
+            .padding(.horizontal, 4).padding(.vertical, 2)
+            .background(Tia.paneHeader)
             HStack {
-                Text(el.kind == .ton ? "IN" : "CU").font(.system(size: 8.5))
+                Text(el.kind == .ton ? "IN" : "CU").font(.system(size: 8.5)).foregroundColor(Tia.textDark)
                 Spacer()
-                Text("Q").font(.system(size: 8.5))
+                Text("Q").font(.system(size: 8.5)).foregroundColor(Tia.textDark)
                 Circle().fill(live ? Tia.runGreen : Color.gray.opacity(0.4)).frame(width: 6, height: 6)
             }
+            .padding(.horizontal, 4)
             HStack {
-                Text(el.kind == .ton ? "PT" : "PV").font(.system(size: 8.5))
+                Text(el.kind == .ton ? "PT" : "PV").font(.system(size: 8.5)).foregroundColor(Tia.textDark)
                 Spacer()
-                Text(el.preset).font(.system(size: 8.5, weight: .semibold))
+                Text(el.preset).font(.system(size: 8.5, weight: .semibold)).foregroundColor(Tia.textDark)
             }
+            .padding(.horizontal, 4).padding(.bottom, 2)
         }
-        .padding(4)
         .frame(width: 86)
+        .background(Tia.boxFill)
         .overlay(RoundedRectangle(cornerRadius: 2).stroke(Color.black, lineWidth: 1.1))
-        .background(Color.white)
     }
 
     // MARK: edits

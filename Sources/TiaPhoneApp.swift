@@ -13,10 +13,16 @@ struct TiaPhoneApp: App {
 struct RootView: View {
     @EnvironmentObject var store: ProjectStore
     var body: some View {
-        if store.project != nil {
-            ProjectView()
-        } else {
-            PortalView()
+        Group {
+            if store.project != nil {
+                ProjectView()
+            } else {
+                PortalView()
+            }
         }
+        // TIA Portal is a light desktop app. Forcing the light scheme keeps
+        // dark text on the light panes even when the phone is in Dark Mode
+        // (v1 bug: white text on white panes in Dark Mode).
+        .preferredColorScheme(.light)
     }
 }

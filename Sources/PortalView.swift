@@ -61,7 +61,8 @@ struct PortalView: View {
                             .font(.system(size: 11)).foregroundColor(.secondary)
                     } else if selected == "steps" {
                         Text("First steps").font(.system(size: 15, weight: .semibold))
-                        ForEach(["1  Create a project and add the CPU from the catalog",
+                        ForEach(["Rotate your phone to landscape — the project view is laid out like the PC, and portrait keeps the tree and task cards behind the Tree / Tasks buttons",
+                                 "1  Create a project and add the CPU from the catalog",
                                  "2  Declare your inputs and outputs in the tag table",
                                  "3  Program Main (OB1) in the LAD editor",
                                  "4  Compile and read the diagnostics in the inspector window",

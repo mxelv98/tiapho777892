@@ -33,9 +33,10 @@ struct DeviceConfigView: View {
                 .padding(10)
             }
             .frame(height: 142)
-            .background(Color(red: 0.96, green: 0.96, blue: 0.97))
+            .background(Tia.rackBG)
             Divider()
             // device overview table
+            ScrollView(.horizontal, showsIndicators: false) {
             VStack(spacing: 0) {
                 tableHeader
                 ScrollView {
@@ -60,6 +61,8 @@ struct DeviceConfigView: View {
                     }
                 }
             }
+            .frame(minWidth: 860)
+            }
             .background(Color.white)
         }
         .background(Color.white)
@@ -70,10 +73,12 @@ struct DeviceConfigView: View {
             Text("\(m.slot)").font(.system(size: 8.5)).foregroundColor(.secondary)
             ZStack {
                 RoundedRectangle(cornerRadius: 2)
-                    .fill(m.slot == 1 ? Color(red: 0.55, green: 0.62, blue: 0.68) : Color(red: 0.62, green: 0.68, blue: 0.74))
+                    .fill(m.slot == 1 ? Tia.cpuDark : Tia.moduleBlue)
                 VStack(spacing: 3) {
                     if m.slot == 1 {
-                        Text("SIMATIC").font(.system(size: 7, weight: .bold)).foregroundColor(.white)
+                        Text("SIEMENS").font(.system(size: 7, weight: .bold)).foregroundColor(.white)
+                            .padding(.horizontal, 3).padding(.vertical, 1)
+                            .background(Tia.siemensTeal)
                         Text("S7-1200").font(.system(size: 8, weight: .bold)).foregroundColor(.white)
                         RoundedRectangle(cornerRadius: 1).fill(Color(red: 0.2, green: 0.25, blue: 0.3)).frame(width: 34, height: 20)
                         HStack(spacing: 2) {

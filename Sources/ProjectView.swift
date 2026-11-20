@@ -23,27 +23,53 @@ struct ProjectView: View {
     @State private var online = false
     @State private var showSim = false
     @State private var selectedNetwork = 0
+    @State private var showTree = false
+    @State private var showCards = false
     @StateObject private var sim = Simulator()
 
     private var project: TiaProject { store.project! }
     private var device: PlcDevice { project.devices[0] }
 
     var body: some View {
-        VStack(spacing: 0) {
-            menuBar
-            toolbar
-            HStack(spacing: 0) {
-                treePane.frame(width: 218)
+        GeometryReader { geo in
+            let portrait = geo.size.width < geo.size.height
+            ZStack {
                 VStack(spacing: 0) {
-                    tabBar
-                    editorArea
+                    menuBar
+                    toolbar
+                    HStack(spacing: 0) {
+                        if !portrait { treePane.frame(width: 218) }
+                        VStack(spacing: 0) {
+                            breadcrumb(portrait: portrait)
+                            tabBar
+                            editorArea
+                        }
+                        .frame(maxWidth: .infinity)
+                        if !portrait { taskCards.frame(width: 224) }
+                    }
+                    .frame(maxHeight: .infinity)
+                    inspector
+                    statusBar
                 }
-                .frame(maxWidth: .infinity)
-                taskCards.frame(width: 224)
+                if portrait && showTree {
+                    HStack(spacing: 0) {
+                        treePane.frame(width: 252)
+                        Color.black.opacity(0.25)
+                            .contentShape(Rectangle())
+                            .onTapGesture { showTree = false }
+                    }
+                    .zIndex(5)
+                }
+                if portrait && showCards {
+                    HStack(spacing: 0) {
+                        Color.black.opacity(0.25)
+                            .contentShape(Rectangle())
+                            .onTapGesture { showCards = false }
+                        taskCards.frame(width: 252)
+                    }
+                    .zIndex(5)
+                }
             }
-            .frame(maxHeight: .infinity)
-            inspector
-            statusBar
         }
         .background(Tia.pane)
         .sheet(isPresented: $showSim) {
@@ -52,24 +78,68 @@ struct ProjectView: View {
         .onAppear { sim.attach(device) }
     }
 
+    /// The editor breadcrumb bar, exactly like TIA's (orange in online mode).
+    private func breadcrumb(portrait: Bool) -> some View {
+        HStack(spacing: 6) {
+            if portrait {
+                Button { showTree = true } label: {
+                    Label("Tree", systemImage: "sidebar.left").font(.system(size: 10.5, weight: .semibold))
+                }
+                .buttonStyle(.plain).foregroundColor(Tia.textDark)
+            }
+            Text(breadcrumbText)
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundColor(Tia.textDark)
+                .lineLimit(1)
+            Spacer()
+            if portrait {
+                Button { showCards = true } label: {
+                    Label("Tasks", systemImage: "sidebar.right").font(.system(size: 10.5, weight: .semibold))
+                }
+                .buttonStyle(.plain).foregroundColor(Tia.textDark)
+            }
+        }
+        .padding(.horizontal, 8).padding(.vertical, 4)
+        .background(sim.powered ? Tia.online : Tia.paneHeader)
+        .overlay(Rectangle().frame(height: 0.7).foregroundColor(Tia.border), alignment: .bottom)
+    }
+
+    private var breadcrumbText: String {
+        let base = "\(project.name)  ▸  \(device.name) [\(device.cpuName)]"
+        switch tab {
+        case .deviceConfig: return base + "  ▸  Device configuration"
+        case .tagTable: return base + "  ▸  PLC tags  ▸  Default tag table"
+        case .block(let n): return base + "  ▸  Program blocks  ▸  \(n) [OB1]"
+        }
+    }
+
     // MARK: menu + toolbar
 
     private var menuBar: some View {
-        HStack(spacing: 14) {
-            ForEach(["Project", "Edit", "View", "Insert", "Online", "Options", "Tools", "Window", "Help"], id: \.self) {
-                Text($0).font(.system(size: 11.5))
+        HStack(spacing: 4) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 13) {
+                    ForEach(["Project", "Edit", "View", "Insert", "Online", "Options", "Tools", "Window", "Help"], id: \.self) {
+                        Text($0).font(.system(size: 11.5)).foregroundColor(Tia.textDark)
+                    }
+                }
+                .padding(.horizontal, 4)
             }
-            Spacer()
-            Text("\(project.name) — TIA Portal V16").font(.system(size: 11.5, weight: .semibold))
-            Spacer()
-            Button("Close project") { store.close() }.font(.system(size: 11.5))
+            Text(project.name)
+                .font(.system(size: 11, weight: .semibold)).foregroundColor(Tia.textDark)
+                .lineLimit(1).frame(maxWidth: 120)
+            Button("Close project") { store.close() }
+                .font(.system(size: 11)).foregroundColor(Tia.textDark)
+            Text("Totally Integrated Automation PORTAL")
+                .font(.system(size: 8.5)).foregroundColor(.secondary).lineLimit(1)
         }
-        .padding(.horizontal, 8).padding(.vertical, 4)
-        .background(online ? Tia.online : Tia.titleBar)
-        .foregroundColor(.white)
+        .padding(.horizontal, 6).padding(.vertical, 4)
+        .background(Tia.titleBar)
+        .overlay(Rectangle().frame(height: 0.7).foregroundColor(Tia.border), alignment: .bottom)
     }
 
     private var toolbar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
         HStack(spacing: 2) {
             ToolbarGlyph(system: "doc.badge.plus", label: "New") { store.close() }
             ToolbarGlyph(system: "folder", label: "Open") { store.close() }
@@ -95,6 +165,7 @@ struct ProjectView: View {
                 Text(s).font(.system(size: 10.5)).foregroundColor(diagnostics.contains { $0.isError } ? Tia.errorRed : .secondary)
             }
         }
+        }
         .padding(.horizontal, 6).padding(.vertical, 3)
         .background(Tia.pane)
         .overlay(Rectangle().frame(height: 0.7).foregroundColor(Tia.border), alignment: .bottom)
@@ -110,17 +181,17 @@ struct ProjectView: View {
                     treeRow(icon: "folder.fill", text: project.name, level: 0, sel: node == .root) { node = .root }
                     treeRow(icon: "cpu", text: "\(device.name) [\(device.cpuName)]", level: 1, sel: false) {}
                     treeRow(icon: "slider.horizontal.3", text: "Device configuration", level: 2, sel: node == .deviceConfig) {
-                        node = .deviceConfig; tab = .deviceConfig
+                        node = .deviceConfig; tab = .deviceConfig; showTree = false
                     }
                     treeRow(icon: "curlybraces", text: "Program blocks", level: 2, sel: false) {}
                     ForEach(device.blocks) { b in
                         treeRow(icon: "square.stack.3d.up", text: "\(b.name) [\(b.type)\(b.number)]", level: 3, sel: node == .block(b.name)) {
-                            node = .block(b.name); tab = .block(b.name)
+                            node = .block(b.name); tab = .block(b.name); showTree = false
                         }
                     }
                     treeRow(icon: "tag", text: "PLC tags", level: 2, sel: false) {}
                     treeRow(icon: "tablecells", text: "Default tag table [\(device.tags.count)]", level: 3, sel: node == .tagTable) {
-                        node = .tagTable; tab = .tagTable
+                        node = .tagTable; tab = .tagTable; showTree = false
                     }
                     treeRow(icon: "eye", text: "Watch and force tables", level: 2, sel: false) {}
                     treeRow(icon: "antenna.radiowaves.left.and.right", text: "Online access", level: 1, sel: false) {}
@@ -135,7 +206,7 @@ struct ProjectView: View {
         Button(action: action) {
             HStack(spacing: 5) {
                 Image(systemName: icon).font(.system(size: 10.5)).foregroundColor(Tia.accent).frame(width: 14)
-                Text(text).font(.system(size: 11.5)).lineLimit(1)
+                Text(text).font(.system(size: 11.5)).lineLimit(1).foregroundColor(Tia.textDark)
                 Spacer()
             }
             .padding(.leading, CGFloat(6 + level * 13)).padding(.trailing, 4).padding(.vertical, 2.5)
@@ -365,8 +436,9 @@ struct ProjectView: View {
             Spacer()
             Text(sim.powered ? (sim.running ? "PLCSIM: RUN" : "PLCSIM: STOP") : "PLCSIM: off").font(.system(size: 10.5))
         }
+        .foregroundColor(.white)
         .padding(.horizontal, 8).padding(.vertical, 3)
-        .background(online ? Tia.online : Tia.paneHeader)
+        .background(Tia.statusBar)
     }
 
     // MARK: actions
