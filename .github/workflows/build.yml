@@ -12,6 +12,18 @@ jobs:
         run: brew install xcodegen
       - name: Generate project
         run: xcodegen generate
+      - name: Run tests
+        run: |
+          set -o pipefail
+          xcodebuild test -project TiaPhone.xcodeproj -scheme TiaPhone \
+            -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' \
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee /tmp/testlog.txt
+      - name: Upload test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-log
+          path: /tmp/testlog.txt
       - name: Build (unsigned)
         run: |
           xcodebuild -project TiaPhone.xcodeproj -scheme TiaPhone \
