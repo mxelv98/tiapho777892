@@ -267,16 +267,14 @@ struct CitiesView: View {
     @State private var query = ""
 
     private var shown: [(Int, City)] {
-        City.all.enumerated().filter { query.isEmpty || $0.element.name.localizedCaseInsensitiveContains(query) }
+        let all: [(Int, City)] = Array(City.all.enumerated())
+        if query.isEmpty { return all }
+        return all.filter { pair in pair.1.name.localizedCaseInsensitiveContains(query) }
     }
 
     var body: some View {
         ZStack {
-            LinearGradient(colors: [Color(red: 0.07, green: 0.10, blue: 0.22),
-                                    Color(red: 0.13, green: 0.20, blue: 0.38),
-                                    Color(red: 0.22, green: 0.30, blue: 0.52)],
-                           startPoint: .top, endPoint: .bottom)
-                .ignoresSafeArea()
+            CitiesBackground()
             VStack(spacing: 12) {
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass").foregroundColor(.white.opacity(0.7))
@@ -296,35 +294,12 @@ struct CitiesView: View {
                 ScrollView(showsIndicators: false) {
                     VStack(spacing: 12) {
                         ForEach(shown, id: \.element.id) { i, c in
-                            Button {
+                            CityRowView(city: c, isSelected: i == selected) {
                                 withAnimation(.spring(response: 0.45, dampingFraction: 0.85)) {
                                     selected = i
                                     tab = 0
                                 }
-                            } label: {
-                                HStack(spacing: 12) {
-                                    Image(systemName: c.condition.symbol)
-                                        .symbolRenderingMode(.multicolor).font(.system(size: 26))
-                                        .frame(width: 40)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(c.name).font(.system(size: 17, weight: .semibold))
-                                        Text(c.region).font(.system(size: 12)).foregroundColor(.white.opacity(0.75)).lineLimit(1)
-                                    }
-                                    Spacer()
-                                    VStack(alignment: .trailing, spacing: 2) {
-                                        Text("\(c.temp)°").font(.system(size: 26, weight: .medium))
-                                        Text("H:\(c.high)° L:\(c.low)°").font(.system(size: 11.5)).foregroundColor(.white.opacity(0.8))
-                                    }
-                                    if i == selected {
-                                        Image(systemName: "checkmark.circle.fill").foregroundColor(.green).font(.system(size: 18))
-                                    }
-                                }
-                                .foregroundColor(.white)
-                                .padding(14)
-                                .glassCard()
-                                .contentShape(Rectangle())
                             }
-                            .buttonStyle(PressableStyle())
                         }
                         if shown.isEmpty {
                             Text("No city matches “\(query)”.")
@@ -362,5 +337,47 @@ struct PressableStyle: ButtonStyle {
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
             .opacity(configuration.isPressed ? 0.88 : 1)
             .animation(.spring(response: 0.3, dampingFraction: 0.7), value: configuration.isPressed)
+    }
+}
+
+struct CitiesBackground: View {
+    var body: some View {
+        let colors: [Color] = [Color(red: 0.07, green: 0.10, blue: 0.22),
+                               Color(red: 0.13, green: 0.20, blue: 0.38),
+                               Color(red: 0.22, green: 0.30, blue: 0.52)]
+        LinearGradient(colors: colors, startPoint: .top, endPoint: .bottom)
+            .ignoresSafeArea()
+    }
+}
+
+struct CityRowView: View {
+    let city: City
+    let isSelected: Bool
+    var action: () -> Void = {}
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: city.condition.symbol)
+                    .symbolRenderingMode(.multicolor).font(.system(size: 26))
+                    .frame(width: 40)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(city.name).font(.system(size: 17, weight: .semibold))
+                    Text(city.region).font(.system(size: 12)).foregroundColor(.white.opacity(0.75)).lineLimit(1)
+                }
+                Spacer()
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text("\(city.temp)°").font(.system(size: 26, weight: .medium))
+                    Text("H:\(city.high)° L:\(city.low)°").font(.system(size: 11.5)).foregroundColor(.white.opacity(0.8))
+                }
+                if isSelected {
+                    Image(systemName: "checkmark.circle.fill").foregroundColor(.green).font(.system(size: 18))
+                }
+            }
+            .foregroundColor(.white)
+            .padding(14)
+            .glassCard()
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PressableStyle())
     }
 }
