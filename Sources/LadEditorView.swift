@@ -20,6 +20,7 @@ struct LadEditorView: View {
     @Binding var insertRequest: LadElementKind?
 
     @State private var zoom: CGFloat = 1.0
+    @State private var pinchStart: CGFloat? = nil
     @State private var showInterface = true
     @State private var selNet: Int? = nil
     @State private var selPos: Int = -1          // series index; -2 = output; -3 = parallel idx encoded separately
@@ -56,9 +57,13 @@ struct LadEditorView: View {
                     }
                     .padding(10 * z)
                     .frame(minWidth: geo.size.width, alignment: .leading)
-                    .background(
+                    .simultaneousGesture(
                         MagnificationGesture()
-                            .onChanged { v in zoom = min(2.0, max(0.5, v)) }
+                            .onChanged { v in
+                                if pinchStart == nil { pinchStart = zoom }
+                                zoom = min(2.0, max(0.5, (pinchStart ?? 1) * v))
+                            }
+                            .onEnded { _ in pinchStart = nil }
                     )
                 }
                 .background(Color.white)
