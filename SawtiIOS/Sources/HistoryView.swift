@@ -8,55 +8,58 @@ struct HistoryView: View {
     @State private var playingId = ""
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                Theme.bg.ignoresSafeArea()
-                VStack {
-                    if loading && items.isEmpty {
-                        Spacer()
-                        ProgressView().tint(Theme.emerald)
-                        Spacer()
-                    } else if items.isEmpty {
-                        Spacer()
-                        Text("ما عندك حتى توليد حتى الآن").foregroundColor(Theme.muted)
-                        Spacer()
-                    } else {
-                        List {
-                            ForEach(items) { g in
-                                VStack(alignment: .leading, spacing: 6) {
-                                    HStack {
-                                        Text(g.voiceName ?? g.voiceId ?? "صوت").bold().foregroundColor(.white)
-                                        Spacer()
-                                        Button {
-                                            Task { await play(g) }
-                                        } label: {
-                                            Image(systemName: (player.isPlaying && playingId == g.id) ? "pause.circle.fill" : "play.circle.fill")
-                                                .font(.title2).foregroundColor(Theme.emerald)
-                                        }
-                                        .buttonStyle(.plain)
-                                    }
-                                    Text(g.text ?? "")
-                                        .font(.footnote).foregroundColor(Theme.muted)
-                                        .lineLimit(2)
-                                }
-                                .padding(.vertical, 4)
-                                .listRowBackground(Theme.card)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("السجل").font(.largeTitle.bold()).foregroundColor(.white)
+                    .padding(.top, 8)
+                if loading && items.isEmpty {
+                    HStack { Spacer(); ProgressView().tint(Glass.emerald); Spacer() }
+                        .padding(.top, 60)
+                } else if items.isEmpty {
+                    Text("ما عندك حتى توليد حتى الآن")
+                        .foregroundColor(.white.opacity(0.5))
+                        .padding(.top, 40)
+                } else {
+                    ForEach(items) { g in
+                        HStack(spacing: 12) {
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(g.voiceName ?? g.voiceId ?? "صوت").bold().foregroundColor(.white)
+                                Text(g.text ?? "")
+                                    .font(.footnote).foregroundColor(.white.opacity(0.55))
+                                    .lineLimit(2)
                             }
-                            .onDelete { idx in
-                                Task { await delete(at: idx) }
+                            Spacer()
+                            Button {
+                                Task { await remove(g) }
+                            } label: {
+                                Image(systemName: "trash")
+                                    .font(.footnote).foregroundColor(.red.opacity(0.8))
                             }
+                            .buttonStyle(GlassPressStyle())
+                            Button {
+                                Task { await play(g) }
+                            } label: {
+                                Image(systemName: (player.isPlaying && playingId == g.id) ? "pause.fill" : "play.fill")
+                                    .font(.body).foregroundColor(Glass.ink)
+                                    .frame(width: 40, height: 40)
+                                    .background(LinearGradient(colors: [Color(red: 0.20, green: 0.90, blue: 0.66), Glass.emerald], startPoint: .top, endPoint: .bottom))
+                                    .clipShape(Circle())
+                            }
+                            .buttonStyle(GlassPressStyle())
                         }
-                        .scrollContentBackground(.hidden)
-                    }
-                    if player.currentFile != nil {
-                        PlayerCard().padding(12)
+                        .padding(14)
+                        .glassCard(corner: 18)
                     }
                 }
+                if player.currentFile != nil {
+                    PlayerCard()
+                }
+                Spacer(minLength: 84)
             }
-            .navigationTitle("السجل")
-            .task { await load() }
-            .refreshable { await load() }
+            .padding(16)
         }
+        .task { await load() }
+        .refreshable { await load() }
     }
 
     private func load() async {
@@ -83,11 +86,8 @@ struct HistoryView: View {
         }
     }
 
-    private func delete(at offsets: IndexSet) async {
-        for i in offsets {
-            let g = items[i]
-            _ = await api.delete("/api/generations/\(g.id)")
-        }
-        items.remove(atOffsets: offsets)
+    private func remove(_ g: Generation) async {
+        _ = await api.delete("/api/generations/\(g.id)")
+        items.removeAll { $0.id == g.id }
     }
 }

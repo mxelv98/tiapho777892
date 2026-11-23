@@ -4,49 +4,69 @@ struct AccountView: View {
     @EnvironmentObject var api: API
     @State private var user: SawtiUser?
 
-    var body: some View {
-        NavigationStack {
-            ZStack {
-                Theme.bg.ignoresSafeArea()
-                VStack(spacing: 16) {
-                    VStack(spacing: 8) {
-                        Image(systemName: "person.circle.fill")
-                            .font(.system(size: 56)).foregroundColor(Theme.emerald)
-                        Text(user?.name ?? "…").font(.title3.bold()).foregroundColor(.white)
-                        Text(user?.email ?? "").font(.footnote).foregroundColor(Theme.muted)
-                    }
-                    .padding(.top, 24)
-                    VStack(spacing: 0) {
-                        row(label: "الباقة", value: user?.planName ?? user?.plan ?? "—")
-                        Divider().background(Color.white.opacity(0.08))
-                        row(label: "الرصيد المتبقي", value: user?.remainingTokens.map { "\(fmt($0)) نقطة" } ?? "—")
-                        Divider().background(Color.white.opacity(0.08))
-                        row(label: "المستعمل", value: user?.usedTokens.map { "\(fmt($0)) نقطة" } ?? "—")
-                    }
-                    .background(Theme.card).cornerRadius(16)
-                    .padding(.horizontal, 16)
-                    Button("تسجيل الخروج") {
-                        api.logout()
-                    }
-                    .foregroundColor(.red).font(.footnote.bold())
-                    .padding(.top, 8)
-                    Spacer()
-                    Text("صوتي — نسخة تجريبية iOS 1.0")
-                        .font(.caption2).foregroundColor(Theme.muted)
-                }
-            }
-            .navigationTitle("الحساب")
-            .task { await load() }
-        }
+    private var usageFraction: Double {
+        guard let q = user?.quotaTokens, q > 0, let used = user?.usedTokens else { return 0 }
+        return min(1, Double(used) / Double(q))
     }
 
-    private func row(label: String, value: String) -> some View {
-        HStack {
-            Text(label).foregroundColor(Theme.muted)
-            Spacer()
-            Text(value).foregroundColor(.white).bold()
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 18) {
+                Text("الحساب").font(.largeTitle.bold()).foregroundColor(.white)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 8)
+
+                VStack(spacing: 8) {
+                    ZStack {
+                        Circle().fill(.ultraThinMaterial)
+                            .frame(width: 78, height: 78)
+                            .overlay(Circle().strokeBorder(Glass.rim(), lineWidth: 1))
+                        Image(systemName: "person.fill")
+                            .font(.system(size: 32)).foregroundColor(Glass.emerald)
+                    }
+                    Text(user?.name ?? "…").font(.title3.bold()).foregroundColor(.white)
+                    Text(user?.email ?? "").font(.footnote).foregroundColor(.white.opacity(0.55))
+                }
+
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Label(user?.planName ?? user?.plan ?? "—", systemImage: "crown.fill")
+                            .font(.headline).foregroundColor(.white)
+                        Spacer()
+                        Text("الباقة الحالية").font(.caption).foregroundColor(Glass.gold)
+                    }
+                    GeometryReader { geo in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(Color.white.opacity(0.10))
+                            Capsule()
+                                .fill(LinearGradient(colors: [Color(red: 0.20, green: 0.90, blue: 0.66), Glass.emerald], startPoint: .leading, endPoint: .trailing))
+                                .frame(width: geo.size.width * usageFraction)
+                        }
+                    }
+                    .frame(height: 8)
+                    HStack {
+                        Text("المتبقي: \(user?.remainingTokens.map { fmt($0) } ?? "—") نقطة")
+                        Spacer()
+                        Text("المستعمل: \(user?.usedTokens.map { fmt($0) } ?? "—")")
+                    }
+                    .font(.caption).foregroundColor(.white.opacity(0.65))
+                }
+                .padding(18)
+                .glassCard(tint: Glass.emerald)
+
+                Button("تسجيل الخروج") {
+                    api.logout()
+                }
+                .foregroundColor(.red).font(.footnote.bold())
+                .padding(.top, 4)
+
+                Text("صوتي — نسخة تجريبية iOS 1.0")
+                    .font(.caption2).foregroundColor(.white.opacity(0.35))
+                Spacer(minLength: 84)
+            }
+            .padding(16)
         }
-        .padding(14)
+        .task { await load() }
     }
 
     private func fmt(_ n: Int) -> String {
